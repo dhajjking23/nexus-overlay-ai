@@ -1,0 +1,308 @@
+# NEXUS OVERLAY AI - Default Configuration
+# Real-Time XAUUSD AI Trading Overlay
+
+system:
+  name: "Nexus Overlay AI"
+  version: "1.0.0"
+  log_level: "INFO"
+  data_dir: "./data"
+
+# --- Symbol Configuration ---
+symbol:
+  name: "XAUUSD"
+  digits: 2
+  point: 0.01
+  tick_size: 0.01
+  contract_size: 100
+  min_lot: 0.01
+  max_lot: 100.0
+  spread_threshold: 1.0
+
+# --- Timeframe Configuration ---
+timeframes:
+  primary: "M1"
+  analysis:
+    - "M1"
+    - "M3"
+    - "M5"
+    - "M15"
+    - "M30"
+    - "H1"
+    - "H4"
+  candle_history:
+    M1: 2000
+    M3: 1500
+    M5: 1500
+    M15: 1000
+    M30: 500
+    H1: 500
+    H4: 300
+
+# --- Transport Configuration ---
+transport:
+  type: "websocket"
+  host: "0.0.0.0"
+  port: 8765
+  heartbeat_interval: 5000
+  reconnect_delay_ms: 1000
+  max_reconnect_attempts: 10
+  stale_data_timeout_ms: 10000
+  protocol_version: "1.0"
+
+# --- Indicator Configuration ---
+indicators:
+  trend:
+    ema_periods: [20, 50, 100, 200]
+    sma_periods: [50, 200]
+  momentum:
+    rsi_period: 14
+    rsi_oversold: 30
+    rsi_overbought: 70
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    roc_period: 10
+  volatility:
+    atr_period: 14
+    bb_period: 20
+    bb_std: 2.0
+  trend_strength:
+    adx_period: 14
+    adx_strong: 25
+    adx_weak: 20
+  volume:
+    volume_ma_period: 20
+    expansion_threshold: 1.5
+
+# --- Structure Engine ---
+structure:
+  swing_lookback: 5
+  min_swing_distance_pips: 10
+  bos_confirmation_candles: 1
+  choch_confirmation_candles: 2
+
+# --- Liquidity Engine ---
+liquidity:
+  equal_level_tolerance_pips: 2.0
+  lookback_sessions: 5
+  sweep_confirmation_pips: 1.0
+  sweep_max_age_candles: 20
+
+# --- Zone Engine ---
+zones:
+  order_block_lookback: 20
+  fvg_min_gap_pips: 1.0
+  zone_max_touches: 5
+  zone_freshness_candles: 50
+  zone_merge_tolerance_pips: 5.0
+
+# --- Session Engine ---
+sessions:
+  broker_timezone: "UTC"
+  sessions:
+    asian:
+      start: "00:00"
+      end: "06:00"
+      timezone: "Asia/Tokyo"
+    london:
+      start: "07:00"
+      end: "16:00"
+      timezone: "Europe/London"
+    new_york:
+      start: "13:00"
+      end: "22:00"
+      timezone: "America/New_York"
+    overlap:
+      start: "13:00"
+      end: "16:00"
+      timezone: "Europe/London"
+
+# --- Regime Engine ---
+regime:
+  trend_adx_threshold: 25
+  volatility_atr_multiplier: 1.5
+  range_atr_multiplier: 0.8
+  breakout_confirmation_candles: 3
+  consolidation_candles: 10
+
+# --- Strategy Engine ---
+strategies:
+  enabled:
+    - "trend_following"
+    - "pullback"
+    - "breakout"
+    - "liquidity_sweep"
+    - "mean_reversion"
+    - "scalping"
+  weights:
+    trend_following: 15
+    pullback: 15
+    breakout: 10
+    liquidity_sweep: 15
+    mean_reversion: 10
+    scalping: 10
+
+# --- Confluence Weights ---
+confluence:
+  trend: 15
+  structure: 15
+  mtf: 15
+  price_action: 10
+  liquidity: 10
+  momentum: 10
+  volatility: 10
+  zone: 5
+  session: 5
+  risk_reward: 5
+
+# --- Risk Engine ---
+risk:
+  min_rr: 1.5
+  min_confidence: 70
+  max_spread: 1.0
+  max_risk_per_trade_pct: 1.0
+  max_daily_trades: 10
+  max_concurrent_signals: 3
+  signal_expiry_candles: 5
+  stale_data_threshold_ms: 10000
+
+# --- Entry Engine ---
+entry:
+  types:
+    - "market"
+    - "limit"
+    - "confirmation"
+    - "zone"
+  confirmation_candles: 1
+  retest_tolerance_pips: 2.0
+
+# --- SL Engine ---
+sl:
+  methods:
+    - "atr"
+    - "structure"
+    - "swing"
+    - "zone"
+  atr_multiplier: 1.5
+  min_sl_pips: 5.0
+  max_sl_pips: 100.0
+  buffer_pips: 1.0
+
+# --- TP Engine ---
+tp:
+  methods:
+    - "risk_reward"
+    - "liquidity"
+    - "support_resistance"
+    - "previous_high_low"
+    - "atr_projection"
+  tp1_rr: 1.5
+  tp2_rr: 2.5
+  tp3_rr: 3.5
+
+# --- AI Configuration ---
+ai:
+  enabled: true
+  provider: "openai"
+  providers:
+    openai:
+      model: "gpt-4o-mini"
+      max_tokens: 500
+      temperature: 0.1
+      rate_limit_per_minute: 10
+    claude:
+      model: "claude-3-haiku-20240307"
+      max_tokens: 500
+      temperature: 0.1
+      rate_limit_per_minute: 10
+    local:
+      endpoint: "http://localhost:11434/api/generate"
+      model: "llama3"
+  fallback_to_deterministic: true
+  cache_snapshots: true
+  cache_ttl_seconds: 60
+
+# --- Decision Engine ---
+decision:
+  states:
+    - "BUY"
+    - "SELL"
+    - "WAIT"
+  internal_states:
+    - "DATA_UNAVAILABLE"
+    - "DATA_STALE"
+    - "RISK_REJECTED"
+    - "CONFLICT"
+    - "NO_SETUP"
+    - "AI_UNAVAILABLE"
+    - "MARKET_CLOSED"
+  confidence_weights:
+    technical_confluence: 0.35
+    mtf_agreement: 0.25
+    risk_quality: 0.15
+    data_quality: 0.15
+    ai_assessment: 0.10
+
+# --- Signal Lifecycle ---
+signal:
+  states:
+    - "NEW"
+    - "CONFIRMED"
+    - "ACTIVE"
+    - "WEAKENING"
+    - "INVALIDATED"
+    - "EXPIRED"
+    - "COMPLETED"
+  expiry_candles: 5
+  weakening_threshold: 0.5
+
+# --- Data Quality ---
+data_quality:
+  excellent: 95
+  very_good: 90
+  acceptable: 75
+  degraded: 50
+  minimum_threshold: 50
+
+# --- Safety Governor ---
+safety:
+  stale_data: true
+  excessive_spread: true
+  abnormal_volatility: true
+  insufficient_rr: true
+  conflicting_mtf: true
+  missing_candle: true
+  transport_disconnected: true
+  malformed_data: true
+  invalid_prices: true
+  max_spread: 1.0
+  max_volatility_atr_multiplier: 3.0
+
+# --- Database ---
+database:
+  type: "sqlite"
+  path: "./data/nexus_overlay.db"
+  backup_interval_hours: 24
+
+# --- Alert Configuration ---
+alerts:
+  enabled: true
+  types:
+    new_buy: true
+    new_sell: true
+    wait_to_buy: true
+    wait_to_sell: true
+    signal_invalidated: true
+    tp1_hit: true
+    tp2_hit: true
+    tp3_hit: true
+    sl_reached: true
+    connection_lost: true
+    connection_restored: true
+
+# --- Performance ---
+performance:
+  tick_processing: "selective"
+  expensive_analysis_trigger: "CANDLE_CLOSED"
+  ai_rate_limit_per_minute: 10
+  max_memory_mb: 256

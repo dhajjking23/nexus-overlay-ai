@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Nexus Overlay</string>
+    <string name="overlay_notification_channel">Overlay Service</string>
+    <string name="overlay_notification_title">Nexus Overlay Active</string>
+    <string name="overlay_notification_text">Monitoring signals</string>
+</resources>
