@@ -201,16 +201,27 @@ tp:
   tp3_rr: 3.5
 
 # --- AI Configuration ---
+# Default: OpenRouter (OpenAI-compatible API, no paid key needed)
+# Get key: https://openrouter.ai/settings/keys
 ai:
   enabled: true
-  provider: "openai"
+  provider: "openrouter"
   providers:
+    openrouter:
+      endpoint: "https://openrouter.ai/api/v1/chat/completions"
+      model: "openrouter/kr"
+      max_tokens: 500
+      temperature: 0.1
+      rate_limit_per_minute: 10
+      # OPENROUTER_API_KEY loaded from .env
     openai:
+      endpoint: "https://api.openai.com/v1/chat/completions"
       model: "gpt-4o-mini"
       max_tokens: 500
       temperature: 0.1
       rate_limit_per_minute: 10
     claude:
+      endpoint: "https://api.anthropic.com/v1/messages"
       model: "claude-3-haiku-20240307"
       max_tokens: 500
       temperature: 0.1

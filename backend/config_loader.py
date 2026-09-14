@@ -53,6 +53,7 @@ class Config:
             "TRANSPORT_PORT": ("transport", "port"),
             "DATABASE_PATH": ("database", "path"),
             "LOG_LEVEL": ("system", "log_level"),
+            "OPENROUTER_API_KEY": ("ai", "providers", "openrouter", "api_key"),
             "OPENAI_API_KEY": ("ai", "providers", "openai", "api_key"),
             "ANTHROPIC_API_KEY": ("ai", "providers", "claude", "api_key"),
             "SECRET_KEY": ("system", "secret_key"),
