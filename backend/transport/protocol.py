@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from enum import Enum
 
-from backend.models import MessageType, ProtocolMessage as BaseProtocolMessage
+from backend.models import MessageType, ProtocolMessage
 
 logger = logging.getLogger(__name__)
 
