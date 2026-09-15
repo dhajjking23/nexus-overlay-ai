@@ -276,6 +276,43 @@ class IndicatorEngine:
             },
         )
 
+    def compute(self, candles: list[CandleData]) -> dict:
+        """Compute all indicators for a candle window. Returns dict of indicator_name -> value."""
+        if not candles or len(candles) < 20:
+            return {}
+        results = {}
+        for name, method in [
+            ("ema20", lambda: self.compute_ema(candles, 20)),
+            ("ema50", lambda: self.compute_ema(candles, 50)),
+            ("ema100", lambda: self.compute_ema(candles, 100)),
+            ("ema200", lambda: self.compute_ema(candles, 200)),
+            ("sma50", lambda: self.compute_sma(candles, 50)),
+            ("sma200", lambda: self.compute_sma(candles, 200)),
+            ("rsi", self.compute_rsi),
+            ("macd", self.compute_macd),
+            ("roc", self.compute_roc),
+            ("atr", self.compute_atr),
+            ("atr_pct", self.compute_atr_pct),
+            ("bollinger", self.compute_bollinger_bands),
+        ]:
+            try:
+                val = method()
+                if val is not None:
+                    results[name] = val.value
+                    results[f"{name}_state"] = val.state
+            except Exception:
+                pass
+        # ADX + DI
+        try:
+            adx_result = self.compute_adx(candles)
+            if adx_result:
+                results["adx"] = adx_result.get("adx", 0)
+                results["di_plus"] = adx_result.get("di_plus", 0)
+                results["di_minus"] = adx_result.get("di_minus", 0)
+        except Exception:
+            pass
+        return results
+
     # ── ROC ───────────────────────────────────────────────────────────────
     def compute_roc(self, candles: list[CandleData]) -> Optional[IndicatorValue]:
         """

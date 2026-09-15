@@ -136,59 +136,97 @@ class NexusOverlayApp:
     # --- Callbacks from MT5 EA ---
     async def _on_tick(self, client, message):
         payload = message.payload
-        await self.market_data.process_tick(payload)
-        indicators = self.indicators.compute(self.market_data.get_candles("M5"))
+        try:
+            await self.market_data.process_tick(payload)
+        except Exception as e:
+            logger.error(f"process_tick error: {e}")
+            return
+
+        # Compute indicators
+        m5_candles = self.market_data.get_candles("M5")
+        indicators = self.indicators.compute(m5_candles) if m5_candles and len(m5_candles) >= 20 else {}
+
+        # Safety check
         tick_age = self._get_tick_age_ms()
+        dq = self.market_data.get_data_quality()
+        dq_score = dq.score if hasattr(dq, "score") else float(dq) if dq else 0.0
         safety_result = await self.safety.validate(
-            spread=payload.get("spread", 0), last_tick_age_ms=tick_age,
-            data_live=True, connected=True, mtf_aligned=True,
-            data_quality=self.market_data.get_data_quality()
+            price=payload.get("bid", 0),
+            spread=payload.get("spread", 0),
+            data_age_ms=tick_age,
+            data_quality=dq_score,
+            transport_connected=True,
+            mtf=None,
+            market_open=True,
         )
-        if not safety_result.all_passed:
+        if safety_result.block:
+            logger.debug(f"Safety block: {safety_result.blocks}")
             return
-        candles = self.market_data.get_candles("M5")
-        if not candles or len(candles) < 20:
+
+        # Need at least 20 M5 candles for analysis
+        if not m5_candles or len(m5_candles) < 20:
             return
-        structure = self.structure.analyze(candles)
-        liq = self.liquidity.analyze(candles, structure)
-        zones = self.zones.analyze(candles)
+
+        # Run engine pipeline
+        structure = self.structure.analyze(m5_candles)
+        liq = self.liquidity.analyze(m5_candles, structure)
+        zones = self.zones.analyze(m5_candles)
         mtf_data = {tf: self.market_data.get_candles(tf) for tf in ["H4", "H1", "M30", "M15", "M5", "M3", "M1"]}
         mtf_result = self.mtf.analyze(mtf_data)
         sess = self.session.analyze()
-        regime_result = self.regime.analyze(candles, indicators)
+        regime_result = self.regime.analyze(m5_candles, indicators)
+
+        # Strategies
         strategies = await self.strategy.evaluate({
-            "candles": candles, "indicators": indicators, "structure": structure,
+            "candles": m5_candles, "indicators": indicators, "structure": structure,
             "liquidity": liq, "zones": zones, "mtf": mtf_result, "regime": regime_result,
             "session": sess, "price_action": []
         })
+
+        # Confluence
         conf = self.confluence.calculate(
             indicators=indicators, structure=structure, mtf=mtf_result,
-            liquidity=liq, regime=regime_result, session_active=sess.get("session_active", True),
-            volatility_atr=regime_result.get("adx", 20), atr_avg=2.0
+            liquidity=liq, regime=regime_result,
+            session_active=sess.get("session_active", True),
+            volatility_atr=float(regime_result.get("adx", 20)),
+            atr_avg=float(indicators.get("atr", 2.0)),
         )
-        output = DecisionEngineOutput(
-            indicators=indicators, structure=structure, liquidity_events=liq,
-            price_action_patterns=[], mtf_analysis=mtf_result, regime=regime_result,
-            session=sess, strategy_assessments=strategies, confluence_score=conf,
-            current_price=payload.get("bid", 0), current_spread=payload.get("spread", 0),
-            data_quality=self.market_data.get_data_quality(),
-            atr=regime_result.get("adx", 20), atr_avg=2.0,
-            swing_highs=structure.swing_highs if structure else [],
-            swing_lows=structure.swing_lows if structure else [],
-            zones=zones
-        )
-        signal_result = await self.decision.evaluate(output)
-        signal_json = signal_result.to_dict() if hasattr(signal_result, "to_dict") else signal_result
-        await self.ws_server.broadcast_to_android({
-            "message_type": "SIGNAL_CREATED" if signal_result.decision.value not in ("WAIT",) else "MARKET_SNAPSHOT",
-            "payload": signal_json
-        })
+
+        # Build DecisionEngineOutput
+        output = DecisionEngineOutput()
+        output.strategy_assessments = strategies
+        output.confluence = conf
+        output.price = payload.get("bid", 0)
+        output.spread = payload.get("spread", 0)
+        output.trend = regime_result.get("trend", "NEUTRAL")
+        output.regime = regime_result.get("regime", "UNCERTAIN")
+        output.data_quality = dq_score
+        output.data_age_ms = tick_age
+        output.mtf = mtf_result
+        output.transport_connected = True
+        output.market_open = True
+
+        # Evaluate
+        try:
+            signal_result = await self.decision.evaluate(output)
+            signal_json = signal_result.to_dict() if hasattr(signal_result, "to_dict") else signal_result
+            decision_val = signal_result.decision.value if hasattr(signal_result.decision, "value") else str(signal_result.decision)
+            msg_type = "SIGNAL_CREATED" if decision_val not in ("WAIT",) else "MARKET_SNAPSHOT"
+            await self.ws_server.broadcast_to_android({
+                "message_type": msg_type,
+                "payload": signal_json
+            })
+        except Exception as e:
+            logger.error(f"Decision engine error: {e}")
 
     async def _on_candle(self, client, message):
         payload = message.payload
         tf = message.timeframe or "M5"
-        await self.market_data.process_candle(payload, tf)
-        logger.debug(f"Candle closed {tf}: O={payload.get('open')} C={payload.get('close')}")
+        try:
+            await self.market_data.process_candle(payload, tf)
+            logger.debug(f"Candle closed {tf}: O={payload.get('open')} C={payload.get('close')}")
+        except Exception as e:
+            logger.error(f"process_candle error: {e}")
 
     async def _on_symbol_info(self, client, message):
         logger.info(f"Symbol info: {message.payload}")
