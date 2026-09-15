@@ -54,7 +54,7 @@ class WebSocketClient(
         port = serverPort
         signalStore.updateConnectionState(ConnectionState.CONNECTING)
 
-        val url = "ws://$host:$port/ws"
+        val url = "ws://$host:$port"
         val request = Request.Builder()
             .url(url)
             .header("X-Client", "nexus-overlay-android")

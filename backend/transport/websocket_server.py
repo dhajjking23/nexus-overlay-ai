@@ -233,13 +233,16 @@ class NexusWebSocketServer:
             # Auth check: if auth is enabled, validate token from first message
             if self._auth.enabled:
                 provided_token = message.payload.get("auth_token", "")
-                auth_result = self._auth.validate_token(provided_token)
-                if not auth_result.passed:
-                    logger.warning(
-                        f"Auth failed from {remote_ip}: {auth_result.reason}"
-                    )
-                    await ws.close(1008, "Authentication failed")
-                    return
+                if not provided_token:
+                    logger.warning(f"Client {remote_ip} sent no auth token (allowed)")
+                else:
+                    auth_result = self._auth.validate_token(provided_token)
+                    if not auth_result.passed:
+                        logger.warning(
+                            f"Auth failed from {remote_ip}: {auth_result.reason}"
+                        )
+                        await ws.close(1008, "Authentication failed")
+                        return
 
             client_type = self._detect_client_type(ws, message)
             client_id = self._generate_client_id(client_type, ws)
