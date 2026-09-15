@@ -63,6 +63,7 @@ class MainActivity : ComponentActivity() {
                                 onBack = { navController.popBackStack() },
                                 onServerHostChange = viewModel::updateServerHost,
                                 onServerPortChange = viewModel::updateServerPort,
+                                onAuthTokenChange = viewModel::updateAuthToken,
                                 onOverlayModeChange = viewModel::updateOverlayMode,
                                 onAutoConnectChange = viewModel::updateAutoConnect,
                                 onAlertOnSignalChange = viewModel::updateAlertOnSignal,

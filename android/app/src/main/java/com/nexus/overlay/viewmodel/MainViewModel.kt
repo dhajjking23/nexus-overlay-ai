@@ -126,6 +126,11 @@ class MainViewModel(
         _uiState.update { it.copy(serverPort = port.toIntOrNull() ?: 8765) }
     }
 
+    fun updateAuthToken(token: String) {
+        _uiState.update { it.copy(authToken = token) }
+        webSocketClient.updateAuthToken(token)
+    }
+
     fun updateOverlayMode(mode: OverlayMode) {
         _uiState.update { it.copy(overlayMode = mode) }
         // If overlay is running, restart with new mode
@@ -185,6 +190,7 @@ data class UiState(
     val overlayOpacity: Float = 0.85f,
     val serverHost: String = "192.168.1.100",
     val serverPort: Int = 8765,
+    val authToken: String = "",
     val autoConnect: Boolean = true,
     val alertOnSignal: Boolean = true,
     val alertOnSLHit: Boolean = false,

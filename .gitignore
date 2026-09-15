@@ -45,3 +45,4 @@ android/local.properties
 
 # MQL5 compiled
 *.ex5
+apks/

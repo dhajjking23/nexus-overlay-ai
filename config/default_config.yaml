@@ -6,6 +6,7 @@ system:
   version: "1.0.0"
   log_level: "INFO"
   data_dir: "./data"
+  health_check_enabled: true
 
 # --- Symbol Configuration ---
 symbol:
@@ -48,6 +49,10 @@ transport:
   max_reconnect_attempts: 10
   stale_data_timeout_ms: 10000
   protocol_version: "1.0"
+  auth_token: ""  # empty = disabled
+  http_port: 8766  # HTTP bridge for MQL5 EA
+  health_port: 8767  # Health check endpoint
+  rate_limit_per_minute: 120
 
 # --- Indicator Configuration ---
 indicators:

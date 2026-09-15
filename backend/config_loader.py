@@ -57,6 +57,8 @@ class Config:
             "OPENAI_API_KEY": ("ai", "providers", "openai", "api_key"),
             "ANTHROPIC_API_KEY": ("ai", "providers", "claude", "api_key"),
             "SECRET_KEY": ("system", "secret_key"),
+            "AUTH_TOKEN": ("transport", "auth_token"),
+            "HEALTH_PORT": ("transport", "health_port"),
         }
         
         for env_var, config_path in env_mappings.items():

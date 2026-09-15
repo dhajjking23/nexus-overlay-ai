@@ -1,5 +1,6 @@
 package com.nexus.overlay.data
 
+import android.util.Log
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,6 +11,11 @@ import org.json.JSONObject
  * and exposes it as StateFlow for reactive UI updates.
  */
 class SignalStore {
+
+    companion object {
+        private const val TAG = "SignalStore"
+        private const val MAX_HISTORY = 50
+    }
 
     // --- Current signal ---
     private val _currentSignal = MutableStateFlow<SignalData?>(null)
@@ -39,10 +45,6 @@ class SignalStore {
     private val _regime = MutableStateFlow(RegimeData())
     val regime: StateFlow<RegimeData> = _regime.asStateFlow()
 
-    companion object {
-        private const val MAX_HISTORY = 50
-    }
-
     fun updateConnectionState(state: ConnectionState) {
         _connectionStatus.value = state
     }
@@ -54,29 +56,53 @@ class SignalStore {
             val payload = obj.optJSONObject("payload") ?: return
 
             when (messageType) {
-                "SIGNAL_UPDATE" -> processSignalUpdate(payload)
+                "SIGNAL_CREATED" -> processSignal(payload, isUpdate = false)
+                "SIGNAL_UPDATED" -> processSignal(payload, isUpdate = true)
+                "SIGNAL_INVALIDATED" -> {
+                    _currentSignal.value = null
+                }
+                "MARKET_SNAPSHOT" -> processMarketSnapshot(payload)
                 "MARKET_TICK" -> processMarketTick(payload)
-                "CANDLE_CLOSED" -> processCandleClosed(payload)
+                "CANDLE_CLOSED" -> {
+                    // No-op for now
+                }
                 "SYMBOL_INFO" -> processSymbolInfo(payload)
-                "HEARTBEAT" -> processHeartbeat(payload)
+                "HEARTBEAT" -> {
+                    // Heartbeat confirms backend is alive
+                    Log.d(TAG, "Heartbeat received")
+                }
                 "CONNECTION_STATUS" -> processConnectionStatus(payload)
+                "SYSTEM_STATUS" -> {
+                    val status = payload.optString("status", "unknown")
+                    val message = payload.optString("message", "")
+                    Log.i(TAG, "System status: $status - $message")
+                }
             }
         } catch (e: Exception) {
             // Silent parse failure - don't crash on bad data
+            Log.w(TAG, "Failed to parse message: ${e.message}")
         }
     }
 
-    private fun processSignalUpdate(payload: JSONObject) {
+    private fun processSignal(payload: JSONObject, isUpdate: Boolean) {
         val signal = SignalData(
-            signalType = payload.optString("signal", "WAIT"),
+            decision = payload.optString("decision", "WAIT"),
+            confidence = payload.optDouble("confidence", 0.0),
             entry = payload.optDouble("entry", 0.0),
             sl = payload.optDouble("sl", 0.0),
             tp1 = payload.optDouble("tp1", 0.0),
             tp2 = payload.optDouble("tp2", 0.0),
             tp3 = payload.optDouble("tp3", 0.0),
-            confidence = payload.optDouble("confidence", 0.0),
-            timeframe = payload.optString("timeframe", ""),
-            reason = payload.optString("reason", ""),
+            rr = payload.optDouble("rr", 0.0),
+            trend = payload.optString("trend", ""),
+            regime = payload.optString("regime", ""),
+            evidence = payload.optJSONArray("evidence")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it) }
+            } ?: emptyList(),
+            invalidations = payload.optJSONArray("invalidations")?.let { arr ->
+                (0 until arr.length()).map { arr.getString(it) }
+            } ?: emptyList(),
+            isUpdate = isUpdate,
             timestamp = System.currentTimeMillis()
         )
         _currentSignal.value = signal
@@ -113,6 +139,16 @@ class SignalStore {
         }
     }
 
+    private fun processMarketSnapshot(payload: JSONObject) {
+        _marketData.value = _marketData.value.copy(
+            bid = payload.optDouble("bid", 0.0),
+            ask = payload.optDouble("ask", 0.0),
+            spread = payload.optDouble("spread", 0.0),
+            price = payload.optDouble("price", 0.0),
+            lastUpdate = System.currentTimeMillis()
+        )
+    }
+
     private fun processMarketTick(payload: JSONObject) {
         _marketData.value = _marketData.value.copy(
             bid = payload.optDouble("bid", 0.0),
@@ -141,13 +177,6 @@ class SignalStore {
         )
     }
 
-    private fun processHeartbeat(payload: JSONObject) {
-        // Heartbeat confirms backend is alive
-        if (_connectionStatus.value == ConnectionState.CONNECTED) {
-            _connectionStatus.value = ConnectionState.CONNECTED
-        }
-    }
-
     private fun processConnectionStatus(payload: JSONObject) {
         val status = payload.optString("status", "UNKNOWN")
         _connectionStatus.value = when (status) {
@@ -170,22 +199,31 @@ class SignalStore {
 // --- Data classes ---
 
 data class SignalData(
-    val signalType: String = "WAIT",
+    val decision: String = "WAIT",
+    val confidence: Double = 0.0,
     val entry: Double = 0.0,
     val sl: Double = 0.0,
     val tp1: Double = 0.0,
     val tp2: Double = 0.0,
     val tp3: Double = 0.0,
-    val confidence: Double = 0.0,
+    val rr: Double = 0.0,
+    val trend: String = "",
+    val regime: String = "",
+    val evidence: List<String> = emptyList(),
+    val invalidations: List<String> = emptyList(),
+    val isUpdate: Boolean = false,
+    val timestamp: Long = 0L,
+    // Legacy fields kept for backward compatibility
+    val signalType: String = decision,
     val timeframe: String = "",
-    val reason: String = "",
-    val timestamp: Long = 0L
+    val reason: String = ""
 )
 
 data class MarketData(
     val bid: Double = 0.0,
     val ask: Double = 0.0,
     val spread: Double = 0.0,
+    val price: Double = 0.0,
     val lastUpdate: Long = 0L
 )
 

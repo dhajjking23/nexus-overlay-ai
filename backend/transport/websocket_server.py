@@ -26,6 +26,7 @@ from backend.transport.protocol import (
     SequenceError, DuplicateMessageError, compute_checksum,
 )
 from backend.config_loader import get_config
+from backend.auth import TokenAuth, RateLimiter, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -99,11 +100,23 @@ class NexusWebSocketServer:
         self._on_connect: Optional[ConnectionHandler] = None
         self._on_disconnect: Optional[DisconnectionHandler] = None
         
+        # Security
+        self._auth = TokenAuth(config=cfg)
+        max_per_minute = int(cfg.get("transport.rate_limit_per_minute", 120))
+        self._rate_limiter = RateLimiter(max_per_minute=max_per_minute, burst=20)
+
         # Server state
         self._server = None
         self._running = False
         self._stale_check_task: Optional[asyncio.Task] = None
         self._event_bus = None
+
+        # Runtime stats
+        self._stats: dict = {
+            "total_messages": 0,
+            "messages_per_minute": 0.0,
+            "uptime_start": 0,
+        }
     
     def on_tick(self, handler: MessageHandler) -> None:
         self._on_tick = handler
@@ -133,6 +146,7 @@ class NexusWebSocketServer:
     async def start(self) -> None:
         """Start the WebSocket server."""
         self._running = True
+        self._stats["uptime_start"] = time.time()
         self._server = await serve(
             self._handle_client,
             self.host,
@@ -195,6 +209,16 @@ class NexusWebSocketServer:
         """Handle a single WebSocket client connection."""
         client: Optional[ConnectedClient] = None
         client_id: Optional[str] = None
+
+        # Rate limit check
+        remote_ip = "unknown"
+        if ws.remote_address:
+            remote_ip = ws.remote_address[0]
+
+        if not self._rate_limiter.check_rate_limit(remote_ip):
+            logger.warning(f"Rate limit exceeded for {remote_ip}, rejecting")
+            await ws.close(1008, "Rate limit exceeded")
+            return
         
         try:
             # Wait for first message to identify client
@@ -205,7 +229,18 @@ class NexusWebSocketServer:
                 logger.warning(f"Client connection rejected: {e}")
                 await ws.close(1008, "Identification timeout or protocol error")
                 return
-            
+
+            # Auth check: if auth is enabled, validate token from first message
+            if self._auth.enabled:
+                provided_token = message.payload.get("auth_token", "")
+                auth_result = self._auth.validate_token(provided_token)
+                if not auth_result.passed:
+                    logger.warning(
+                        f"Auth failed from {remote_ip}: {auth_result.reason}"
+                    )
+                    await ws.close(1008, "Authentication failed")
+                    return
+
             client_type = self._detect_client_type(ws, message)
             client_id = self._generate_client_id(client_type, ws)
             
@@ -269,7 +304,10 @@ class NexusWebSocketServer:
         client.last_seen = now_ms()
         client.last_sequence = message.sequence
         client.heartbeat.record_received()
-        
+
+        # Update stats
+        self._stats["total_messages"] += 1
+
         msg_type = message.message_type
         
         if msg_type == MessageType.HEARTBEAT:
@@ -468,7 +506,11 @@ class NexusWebSocketServer:
                 "is_stale": c.is_stale,
                 "remote": str(c.websocket.remote_address) if c.websocket.remote_address else "unknown",
             }
-        
+
+        uptime = 0.0
+        if self._stats["uptime_start"] > 0:
+            uptime = time.time() - self._stats["uptime_start"]
+
         return {
             "running": self._running,
             "host": self.host,
@@ -478,4 +520,12 @@ class NexusWebSocketServer:
             "android_clients": sum(1 for c in self.clients.values() if c.client_type == ClientType.ANDROID),
             "sequence": self._sequence,
             "clients": clients_info,
+            "stats": {
+                "total_messages": self._stats["total_messages"],
+                "messages_per_minute": round(
+                    self._stats["total_messages"] / (uptime / 60.0), 1
+                ) if uptime > 60 else self._stats["total_messages"],
+                "uptime_seconds": round(uptime, 1),
+            },
+            "auth_enabled": self._auth.enabled,
         }

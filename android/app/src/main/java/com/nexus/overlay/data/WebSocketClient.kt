@@ -3,6 +3,7 @@ package com.nexus.overlay.data
 import kotlinx.coroutines.*
 import okhttp3.*
 import okio.ByteString
+import org.json.JSONObject
 import java.util.concurrent.TimeUnit
 
 /**
@@ -10,7 +11,8 @@ import java.util.concurrent.TimeUnit
  * Handles connection, reconnection, and message routing to SignalStore.
  */
 class WebSocketClient(
-    private val signalStore: SignalStore
+    private val signalStore: SignalStore,
+    private var authToken: String = ""
 ) {
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
@@ -28,6 +30,21 @@ class WebSocketClient(
     private var maxReconnectDelay = 30_000L // 30 seconds max
 
     private val _isConnected = false
+
+    /**
+     * Update the auth token used for server identification.
+     */
+    fun updateAuthToken(token: String) {
+        authToken = token
+    }
+
+    /**
+     * Update the server host and port.
+     */
+    fun updateServer(host: String, port: Int) {
+        this.host = host
+        this.port = port
+    }
 
     /**
      * Connect to the WebSocket server.
@@ -89,20 +106,35 @@ class WebSocketClient(
         return webSocket != null && signalStore.connectionStatus.value == ConnectionState.CONNECTED
     }
 
+    private fun buildIdentificationMessage(): String {
+        val payload = JSONObject().apply {
+            put("client_type", "ANDROID")
+            put("client_version", "1.0.0")
+            if (authToken.isNotEmpty()) {
+                put("auth_token", authToken)
+            }
+        }
+        val msg = JSONObject().apply {
+            put("protocol_version", "1.0")
+            put("message_type", "HEARTBEAT")
+            put("sequence", 0)
+            put("symbol", "XAUUSD")
+            put("timeframe", "TICK")
+            put("timestamp", System.currentTimeMillis())
+            put("payload", payload)
+        }
+        return msg.toString()
+    }
+
     private fun createListener(): WebSocketListener {
         return object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 reconnectAttempt = 0
                 signalStore.updateConnectionState(ConnectionState.CONNECTED)
 
-                // Send initial subscription message
-                val subscribeMsg = """{
-                    "type": "subscribe",
-                    "symbol": "XAUUSD",
-                    "channels": ["ticks", "candles", "signals"],
-                    "timeframes": ["M1", "M3", "M5", "M15", "M30", "H1", "H4"]
-                }"""
-                webSocket.send(subscribeMsg)
+                // Send identification message as first message
+                val identificationMsg = buildIdentificationMessage()
+                webSocket.send(identificationMsg)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {

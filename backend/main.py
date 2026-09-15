@@ -41,6 +41,8 @@ from backend.engines.confidence_model import ConfidenceModelEngine
 from backend.engines.decision_engine import DecisionEngine, DecisionEngineOutput
 from backend.engines.safety_governor import SafetyGovernor
 from backend.transport.websocket_server import NexusWebSocketServer
+from backend.transport.http_bridge import HTTPBridgeServer
+from backend.health import HealthServer
 from backend.database.db import DatabaseManager
 from backend.replay.replay_engine import MarketReplayEngine
 
@@ -84,6 +86,15 @@ class NexusOverlayApp:
         self.ws_server.on_candle(self._on_candle)
         self.ws_server.on_symbol_info(self._on_symbol_info)
 
+        # Health check server
+        self.health_server = HealthServer(cfg)
+
+        # HTTP bridge for MQL5 EA (EA cannot use WebSocket)
+        self.http_bridge = HTTPBridgeServer(cfg)
+        self.http_bridge.on_tick(self._on_tick)
+        self.http_bridge.on_candle(self._on_candle)
+        self.http_bridge.on_symbol_info(self._on_symbol_info)
+
         # DB
         self.db = DatabaseManager(cfg.get("database", {}).get("path", "data/nexus_overlay.db"))
 
@@ -97,6 +108,9 @@ class NexusOverlayApp:
         await self.strategy.start()
         self.ws_server.set_event_bus(get_event_bus())
         asyncio.create_task(self.ws_server.start())
+        await self.health_server.start()
+        self.health_server.update_status("engines_loaded", 16)
+        asyncio.create_task(self.http_bridge.start())
         await self.db.initialize()
         logger.info("All engines started. Waiting for MT5 connection...")
         try:
@@ -110,6 +124,8 @@ class NexusOverlayApp:
     async def stop(self):
         logger.info("Nexus Overlay AI shutting down...")
         self._running = False
+        await self.http_bridge.stop()
+        await self.health_server.stop()
         await self.ws_server.stop()
         await self.decision.stop()
         await self.safety.stop()
@@ -193,7 +209,7 @@ async def main():
     app = NexusOverlayApp()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda: asyncio.create_task(app.start()))
+        loop.add_signal_handler(sig, lambda: asyncio.create_task(app.stop()))
 
     logger.info("Starting Nexus Overlay AI...")
     await app.start()

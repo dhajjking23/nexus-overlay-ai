@@ -36,6 +36,7 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onServerHostChange: (String) -> Unit,
     onServerPortChange: (String) -> Unit,
+    onAuthTokenChange: (String) -> Unit,
     onOverlayModeChange: (OverlayMode) -> Unit,
     onAutoConnectChange: (Boolean) -> Unit,
     onAlertOnSignalChange: (Boolean) -> Unit,
@@ -47,6 +48,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     var serverHostText by remember { mutableStateOf(uiState.serverHost) }
     var serverPortText by remember { mutableStateOf(uiState.serverPort.toString()) }
+    var authTokenText by remember { mutableStateOf(uiState.authToken) }
 
     Scaffold(
         topBar = {
@@ -148,6 +150,30 @@ fun SettingsScreen(
                     },
                     label = { Text("Server Port") },
                     placeholder = { Text("8765") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = NexusAccent,
+                        unfocusedBorderColor = NexusTextMuted,
+                        focusedLabelColor = NexusAccent,
+                        unfocusedLabelColor = NexusTextMuted,
+                        cursorColor = NexusAccent,
+                        focusedTextColor = NexusTextPrimary,
+                        unfocusedTextColor = NexusTextPrimary
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // Auth Token
+                OutlinedTextField(
+                    value = authTokenText,
+                    onValueChange = {
+                        authTokenText = it
+                        onAuthTokenChange(it)
+                    },
+                    label = { Text("Auth Token") },
+                    placeholder = { Text("(optional)") },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
