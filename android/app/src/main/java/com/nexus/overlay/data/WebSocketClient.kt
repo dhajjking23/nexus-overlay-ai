@@ -89,7 +89,7 @@ class WebSocketClient(
         return webSocket != null && signalStore.connectionStatus.value == ConnectionState.CONNECTED
     }
 
-    private fun createListener(): WebSocketListener() {
+    private fun createListener(): WebSocketListener {
         return object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 reconnectAttempt = 0
