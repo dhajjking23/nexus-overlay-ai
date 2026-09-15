@@ -1,7 +1,7 @@
 package com.nexus.overlay.ui.overlay
 
 import android.app.*
-import android.app.ServiceInfo
+import android.content.pm.ServiceInfo
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
