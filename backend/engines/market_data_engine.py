@@ -470,6 +470,39 @@ class MarketDataEngine:
         """Check if a specific timeframe has new data since last check."""
         return tf in self._dirty_timeframes
 
+    # ── Convenience methods called by main.py pipeline ─────────────────
+    async def process_tick(self, payload: dict) -> None:
+        """Accept raw tick dict from transport, convert to TickData, delegate to on_tick."""
+        tick = TickData(
+            bid=float(payload.get("bid", 0)),
+            ask=float(payload.get("ask", 0)),
+            spread=float(payload.get("spread", 0)),
+            volume=int(payload.get("volume", 0)),
+            timestamp=int(payload.get("timestamp", now_ms())),
+            flags=int(payload.get("flags", 0)),
+        )
+        self._last_tick_time["M1"] = tick.timestamp
+        await self.on_tick(tick)
+
+    async def process_candle(self, payload: dict, timeframe: str = "M5") -> None:
+        """Accept raw candle dict from transport, convert to CandleData, delegate to on_candle."""
+        candle = CandleData(
+            open=float(payload.get("open", 0)),
+            high=float(payload.get("high", 0)),
+            low=float(payload.get("low", 0)),
+            close=float(payload.get("close", 0)),
+            volume=int(payload.get("volume", 0)),
+            spread=float(payload.get("spread", 0)),
+            timestamp=int(payload.get("timestamp", now_ms())),
+            timeframe=timeframe,
+            complete=True,
+        )
+        await self.on_candle(candle)
+
+    def get_last_tick_time(self) -> int:
+        """Return timestamp of last tick (ms), 0 if none."""
+        return self._last_tick_time.get("M1", 0)
+
     # ── Data quality report ───────────────────────────────────────────────
     def get_data_quality(self) -> DataQualityReport:
         """Compute a composite data-quality score."""
