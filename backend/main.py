@@ -150,8 +150,12 @@ class NexusOverlayApp:
         tick_age = self._get_tick_age_ms()
         dq = self.market_data.get_data_quality()
         dq_score = dq.score if hasattr(dq, "score") else float(dq) if dq else 0.0
+        bid = payload.get("bid", 0)
+        ask = payload.get("ask", 0)
         safety_result = await self.safety.validate(
-            price=payload.get("bid", 0),
+            bid=bid,
+            ask=ask,
+            price=bid,
             spread=payload.get("spread", 0),
             data_age_ms=tick_age,
             data_quality=dq_score,
