@@ -9,7 +9,8 @@ MT5 → Python Backend → Android Overlay — modular, auditable, deterministic
 ## Architecture
 
 ```
-MT5 EA → WebSocket → Python Backend (20+ engines) → WebSocket → Android Overlay
+MT5 EA → HTTP Bridge (port 8766) → Python Backend (20+ engines) → WebSocket (port 8765) → Android Overlay
+                              ↘ Health Check (port 8767)
 ```
 
 ### Engine Pipeline
@@ -30,10 +31,18 @@ MT5 EA → WebSocket → Python Backend (20+ engines) → WebSocket → Android 
 | Risk Engine | Pre-trade validation gate |
 | Entry/SL/TP Engine | Dynamic price calculation |
 | Confidence Model | Structured confidence scoring |
-| AI Layer | OpenAI/Claude/Local with fallback |
+| AI Layer | OpenAI/Claude/OpenRouter/Local with fallback |
 | Decision Engine | **SINGLE SOURCE OF TRUTH** — BUY/SELL/WAIT |
 | Safety Governor | Global safety checks |
 | Event Bus | Async pub/sub for decoupled modules |
+
+### Transport Layer
+
+| Endpoint | Port | Protocol | Purpose |
+|----------|------|----------|---------|
+| WebSocket Server | 8765 | WebSocket | Backend ↔ Android, Backend ↔ MT5 (WS capable) |
+| HTTP Bridge | 8766 | HTTP POST | **MT5 EA pushes ticks/candles** (EA cannot use WS) |
+| Health Check | 8767 | HTTP GET | `/health` + `/status` for monitoring |
 
 ### Components
 
@@ -41,36 +50,104 @@ MT5 EA → WebSocket → Python Backend (20+ engines) → WebSocket → Android 
 |-----------|------|----------|
 | MT5 Bridge | MQL5 EA + Indicator | `bridge/MQL5/` |
 | Backend | Python 3.10+ / asyncio | `backend/` |
-| Transport | WebSocket (port 8765) | `backend/transport/` |
+| WebSocket Transport | websockets library | `backend/transport/websocket_server.py` |
+| HTTP Bridge | aiohttp.web | `backend/transport/http_bridge.py` |
+| Auth/RateLimit | hmac + token bucket | `backend/auth.py` |
+| Health Server | aiohttp.web | `backend/health.py` |
 | Database | SQLite (aiosqlite) | `backend/database/` |
-| AI | OpenAI / Claude / Ollama | `backend/ai/` |
+| AI | OpenAI / Claude / OpenRouter / Ollama | `backend/ai/` |
 | Android | Kotlin / Jetpack Compose | `android/` |
 | Overlay | SYSTEM_ALERT_WINDOW | `android/.../overlay/` |
 
 ## Quick Start
 
-### Backend
+### Backend (VPS)
+
 ```bash
-git clone https://github.com/YOUR_USERNAME/nexus-overlay-ai.git
+# 1. Clone
+git clone https://github.com/dhajjking23/nexus-overlay-ai.git
 cd nexus-overlay-ai
-python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-cp config/.env.example .env  # Edit with your keys
-python -m backend.main
+
+# 2. Run deployment script (installs deps, creates .env, sets up systemd)
+sudo bash deployment/install.sh
+
+# 3. Edit .env with your API keys
+sudo nano /home/ubuntu/nexus-overlay-ai/.env
+
+# 4. Open ports in Oracle Cloud Console (Security List):
+#    - TCP 8765 (WebSocket)
+#    - TCP 8766 (HTTP Bridge for MT5 EA)
+#    - TCP 8767 (Health check)
+
+# 5. Start
+sudo systemctl start nexus-overlay
+sudo systemctl status nexus-overlay
+sudo journalctl -u nexus-overlay -f
 ```
 
-### MT5
+### MT5 Expert Advisor
+
 1. Copy `bridge/MQL5/NexusDataBridgeEA.mq5` → MT5 `MQL5/Experts/`
 2. Copy `bridge/MQL5/NexusOverlayIndicator.mq5` → MT5 `MQL5/Indicators/`
-3. Compile in MetaEditor
-4. Attach EA to XAUUSD chart
+3. Compile in MetaEditor (F7)
+4. Attach `NexusDataBridgeEA` to XAUUSD chart
+5. **EA Inputs (critical):**
+   - `InpUseHTTP = true` (use HTTP bridge, not file bridge)
+   - `InpHTTPHost = YOUR_VPS_PUBLIC_IP` (e.g., `161.118.225.156`)
+   - `InpHTTPPort = 8766` (HTTP Bridge port)
+   - `InpAuthToken = (value from .env AUTH_TOKEN, if set)`
 
-### Android
-1. Open `android/` in Android Studio
-2. Build & install
-3. Grant overlay permission
-4. Configure server IP
-5. Start overlay
+### Android App
+
+1. Open `android/` folder in Android Studio
+2. Build → Make Project → Build Bundle(s)/APK(s) → Build APK(s)
+3. Install on device
+4. **Grant SYSTEM_ALERT_WINDOW permission** when prompted
+5. Open app → Settings:
+   - Server Host: `YOUR_VPS_PUBLIC_IP` (e.g., `161.118.225.156`)
+   - Server Port: `8765` (WebSocket)
+   - Auth Token: (value from .env AUTH_TOKEN, if set — leave empty if not configured)
+6. Tap **Connect** → **Start Overlay**
+
+## Verification Endpoints
+
+```bash
+# Health check
+curl http://YOUR_VPS_IP:8767/health
+# {"status": "ok", "uptime_seconds": 123, "version": "1.0.0", "engines_loaded": 16, "mt5_connected": false, "android_connected": false}
+
+# Full system status
+curl http://YOUR_VPS_IP:8767/status
+# Returns WebSocket server status with connected clients
+
+# HTTP Bridge status
+curl http://YOUR_VPS_IP:8766/
+# {"service": "nexus-overlay-http-bridge", "running": true, ...}
+
+# Test tick push (simulate MT5 EA)
+curl -X POST http://YOUR_VPS_IP:8766/message \
+  -H "Content-Type: application/json" \
+  -d '{"protocol_version":"1.0","message_type":"MARKET_TICK","sequence":1,"symbol":"XAUUSD","timeframe":"TICK","payload":{"bid":2500.50,"ask":2500.75,"spread":0.25,"volume":100}}'
+# {"status": "ok", "sequence": 1, "message_type": "MARKET_TICK"}
+```
+
+## Configuration
+
+All config in `config/default_config.yaml` with env variable overrides. See `config/.env.example`.
+
+Key settings:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `TRANSPORT_PORT` | 8765 | WebSocket port |
+| `HTTP_BRIDGE_PORT` | 8766 | HTTP Bridge port |
+| `HEALTH_PORT` | 8767 | Health check port |
+| `AUTH_TOKEN` | (empty) | Optional auth token for all connections |
+| `SECRET_KEY` | (empty) | Internal secret for rate limiting |
+| `OPENROUTER_API_KEY` | (empty) | AI provider key (free tier at openrouter.ai) |
+| `LOG_LEVEL` | INFO | Logging level |
+
+**When AUTH_TOKEN is set:** All connections (WS + HTTP) must include it.
 
 ## Key Principles
 
@@ -79,10 +156,7 @@ python -m backend.main
 - **AI = Assistant** — never bypasses risk rules
 - **No fabrication** — uncertain = WAIT, missing data = WAIT
 - **Analysis ≠ Execution** — first version is analysis-only, no auto-trading
-
-## Configuration
-
-All config in `config/default_config.yaml` with env variable overrides. See `config/.env.example`.
+- **Auth is optional** — if no token configured, all connections allowed
 
 ## Documentation
 
