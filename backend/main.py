@@ -54,9 +54,12 @@ class NexusOverlayApp:
         self._config = get_config()
         self._running = False
 
+        # Event bus
+        self._event_bus = get_event_bus()
+
         # Engines
         cfg = self._config.all()
-        self.market_data = MarketDataEngine(cfg)
+        self.market_data = MarketDataEngine(cfg, self._event_bus)
         self.indicators = IndicatorEngine(cfg)
         self.price_action = PriceActionEngine(cfg)
         self.structure = StructureEngine(cfg)
