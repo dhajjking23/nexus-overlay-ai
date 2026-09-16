@@ -191,26 +191,34 @@ class AIProviderType(Enum):
 
 @dataclass
 class ProtocolMessage:
-    """Base protocol message"""
+    """Base protocol message with security fields."""
     protocol_version: str = "1.0"
     message_type: MessageType = MessageType.HEARTBEAT
+    message_id: str = ""
     sequence: int = 0
     symbol: str = "XAUUSD"
     timeframe: str = "M1"
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp() * 1000))
+    source: str = "backend"
     payload: dict = field(default_factory=dict)
     checksum: str = ""
+    hmac_signature: str = ""
+    nonce: str = ""
     
     def to_json(self) -> str:
         return json.dumps({
             "protocol_version": self.protocol_version,
             "message_type": self.message_type.value,
+            "message_id": self.message_id,
             "sequence": self.sequence,
             "symbol": self.symbol,
             "timeframe": self.timeframe,
             "timestamp": self.timestamp,
+            "source": self.source,
             "payload": self.payload,
-            "checksum": self.checksum
+            "checksum": self.checksum,
+            "hmac_signature": self.hmac_signature,
+            "nonce": self.nonce,
         })
     
     @classmethod
@@ -219,12 +227,16 @@ class ProtocolMessage:
         return cls(
             protocol_version=data.get("protocol_version", "1.0"),
             message_type=MessageType(data["message_type"]),
+            message_id=data.get("message_id", ""),
             sequence=data.get("sequence", 0),
             symbol=data.get("symbol", "XAUUSD"),
             timeframe=data.get("timeframe", "M1"),
             timestamp=data.get("timestamp", int(datetime.now().timestamp() * 1000)),
+            source=data.get("source", "backend"),
             payload=data.get("payload", {}),
-            checksum=data.get("checksum", "")
+            checksum=data.get("checksum", ""),
+            hmac_signature=data.get("hmac_signature", ""),
+            nonce=data.get("nonce", ""),
         )
 
 

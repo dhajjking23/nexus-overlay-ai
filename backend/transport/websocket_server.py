@@ -2,6 +2,8 @@
 NEXUS OVERLAY AI - WebSocket Server
 Accepts multiple clients (MT5 EA + Android), manages connection lifecycle,
 stale data detection, reconnect logic, heartbeat, broadcasts signals.
+Security: validates HMAC signatures, replay protection, rate limiting,
+payload size limits, and logs all security events to audit trail.
 """
 from __future__ import annotations
 import asyncio
@@ -23,12 +25,17 @@ from backend.transport.protocol import (
     PROTOCOL_VERSION, MessageValidator, HeartbeatManager,
     create_message, create_heartbeat, parse_message,
     serialize_message, ProtocolError, ChecksumMismatchError,
-    SequenceError, DuplicateMessageError, compute_checksum,
+    SequenceError, DuplicateMessageError, SecurityValidationError,
+    compute_checksum, validate_message_security,
 )
 from backend.config_loader import get_config
-from backend.auth import TokenAuth, RateLimiter, AuthResult
+from backend.auth import TokenAuth, RateLimiter, AuthResult, HMACSigner, ReplayProtection
+from backend.security.audit_log import SecurityAuditLog, AuditEventType
 
 logger = logging.getLogger(__name__)
+
+# Default max payload size: 1MB
+DEFAULT_MAX_PAYLOAD_BYTES = 1_048_576
 
 
 class ClientType(Enum):
@@ -75,6 +82,12 @@ class NexusWebSocketServer:
     - Stale data detection
     - Broadcast to all Android clients
     - Per-client sequence validation
+    - HMAC message verification
+    - Replay attack protection (nonce + message_id tracking)
+    - Timestamp freshness validation
+    - IP-based rate limiting with configurable limits
+    - Max payload size enforcement
+    - Security audit logging
     """
     
     def __init__(self, config: dict | None = None):
@@ -102,8 +115,22 @@ class NexusWebSocketServer:
         
         # Security
         self._auth = TokenAuth(config=cfg)
-        max_per_minute = int(cfg.get("transport.rate_limit_per_minute", 120))
+        self._hmac_signer = HMACSigner(
+            secret_key=cfg.get("security.hmac_secret", "")
+        )
+        self._replay_protection = ReplayProtection(
+            max_message_age_ms=int(cfg.get("security.max_message_age_ms", 30000)),
+            nonce_expiry_s=300,
+        )
+        self._max_payload_bytes = int(cfg.get("security.max_payload_size", DEFAULT_MAX_PAYLOAD_BYTES))
+
+        # Rate limiting
+        max_per_minute = int(cfg.get("security.rate_limit_per_minute",
+                             cfg.get("transport.rate_limit_per_minute", 120)))
         self._rate_limiter = RateLimiter(max_per_minute=max_per_minute, burst=20)
+
+        # Security audit log
+        self._audit_log = SecurityAuditLog()
 
         # Server state
         self._server = None
@@ -142,6 +169,11 @@ class NexusWebSocketServer:
     def set_event_bus(self, event_bus) -> None:
         """Set the event bus for publishing events."""
         self._event_bus = event_bus
+
+    @property
+    def audit_log(self) -> SecurityAuditLog:
+        """Access the security audit log."""
+        return self._audit_log
     
     async def start(self) -> None:
         """Start the WebSocket server."""
@@ -204,18 +236,50 @@ class NexusWebSocketServer:
         remote = ws.remote_address if ws.remote_address else ("unknown", 0)
         prefix = client_type.value.lower()
         return f"{prefix}_{remote[0]}_{remote[1]}_{int(time.time() * 1000)}"
+
+    def _get_remote_ip(self, ws: WebSocketServerProtocol) -> str:
+        """Extract remote IP address from WebSocket connection."""
+        if ws.remote_address:
+            return ws.remote_address[0]
+        return "unknown"
+
+    def _validate_payload_size(self, raw_message: str, remote_ip: str) -> tuple[bool, str]:
+        """
+        Check if message payload exceeds maximum allowed size.
+        Returns (is_valid, error_message).
+        """
+        payload_bytes = len(raw_message.encode("utf-8"))
+        if payload_bytes > self._max_payload_bytes:
+            self._audit_log.log_event(
+                AuditEventType.PAYLOAD_TOO_LARGE,
+                source_ip=remote_ip,
+                details=(
+                    f"Payload {payload_bytes} bytes exceeds max "
+                    f"{self._max_payload_bytes} bytes"
+                ),
+                severity="WARNING",
+            )
+            return (
+                False,
+                f"Payload too large: {payload_bytes} > {self._max_payload_bytes}",
+            )
+        return True, ""
     
     async def _handle_client(self, ws: WebSocketServerProtocol) -> None:
         """Handle a single WebSocket client connection."""
         client: Optional[ConnectedClient] = None
         client_id: Optional[str] = None
 
-        # Rate limit check
-        remote_ip = "unknown"
-        if ws.remote_address:
-            remote_ip = ws.remote_address[0]
+        remote_ip = self._get_remote_ip(ws)
 
+        # Rate limit check
         if not self._rate_limiter.check_rate_limit(remote_ip):
+            self._audit_log.log_event(
+                AuditEventType.RATE_LIMIT_REJECTED,
+                source_ip=remote_ip,
+                details="Connection rejected: rate limit exceeded",
+                severity="WARNING",
+            )
             logger.warning(f"Rate limit exceeded for {remote_ip}, rejecting")
             await ws.close(1008, "Rate limit exceeded")
             return
@@ -224,25 +288,93 @@ class NexusWebSocketServer:
             # Wait for first message to identify client
             try:
                 raw = await asyncio.wait_for(ws.recv(), timeout=10.0)
-                message = parse_message(raw)
+                raw_str = str(raw)
+
+                # Max payload size check
+                valid, err = self._validate_payload_size(raw_str, remote_ip)
+                if not valid:
+                    await ws.close(1009, err)
+                    return
+
+                message = parse_message(raw_str)
             except (asyncio.TimeoutError, ProtocolError) as e:
+                self._audit_log.log_event(
+                    AuditEventType.MALFORMED_MESSAGE,
+                    source_ip=remote_ip,
+                    details=f"Connection rejected: {e}",
+                    severity="WARNING",
+                )
                 logger.warning(f"Client connection rejected: {e}")
                 await ws.close(1008, "Identification timeout or protocol error")
                 return
 
-            # Auth check: if auth is enabled, validate token from first message
+            # Auth check: auth is enabled by default in production
             if self._auth.enabled:
                 provided_token = message.payload.get("auth_token", "")
                 if not provided_token:
-                    logger.warning(f"Client {remote_ip} sent no auth token (allowed)")
+                    self._audit_log.log_event(
+                        AuditEventType.AUTH_NO_TOKEN,
+                        source_ip=remote_ip,
+                        details="No auth token provided",
+                        severity="WARNING",
+                    )
+                    # In production with auth enabled, reject empty tokens
+                    # (unless no server token is configured — see TokenAuth)
+                    auth_result = self._auth.validate_token(provided_token)
+                    if not auth_result.passed:
+                        self._audit_log.log_event(
+                            AuditEventType.AUTH_FAILURE,
+                            source_ip=remote_ip,
+                            details=f"No token provided: {auth_result.reason}",
+                            severity="WARNING",
+                        )
+                        await ws.close(1008, "Authentication required")
+                        return
                 else:
                     auth_result = self._auth.validate_token(provided_token)
                     if not auth_result.passed:
+                        self._audit_log.log_event(
+                            AuditEventType.AUTH_FAILURE,
+                            source_ip=remote_ip,
+                            details=f"Token validation failed: {auth_result.reason}",
+                            severity="WARNING",
+                        )
                         logger.warning(
                             f"Auth failed from {remote_ip}: {auth_result.reason}"
                         )
                         await ws.close(1008, "Authentication failed")
                         return
+                    else:
+                        self._audit_log.log_event(
+                            AuditEventType.AUTH_SUCCESS,
+                            source_ip=remote_ip,
+                            details=f"Token validation passed: {auth_result.reason}",
+                        )
+
+            # Security validation on first message
+            is_valid, sec_err = validate_message_security(
+                message,
+                hmac_secret=self._hmac_signer._secret_key.decode("utf-8") if self._hmac_signer._secret_key else "",
+                max_message_age_ms=self._replay_protection.max_message_age_ms,
+                seen_nonces=self._replay_protection._nonces,
+                seen_message_ids=self._replay_protection._message_ids,
+            )
+            if not is_valid:
+                self._audit_log.log_event(
+                    AuditEventType.SECURITY_VALIDATION_FAILED,
+                    source_ip=remote_ip,
+                    message_id=message.message_id,
+                    details=f"First message security failed: {sec_err}",
+                    severity="CRITICAL",
+                )
+                await ws.close(1008, f"Security validation failed: {sec_err}")
+                return
+
+            # Register message_id and nonce after successful validation
+            if message.message_id:
+                self._replay_protection.register_message_id(message.message_id)
+            if message.nonce:
+                self._replay_protection.register_nonce(message.nonce)
 
             client_type = self._detect_client_type(ws, message)
             client_id = self._generate_client_id(client_type, ws)
@@ -280,15 +412,84 @@ class NexusWebSocketServer:
                     payload={"client_id": client_id, "client_type": client_type.value}
                 )
             
+            # State resync: send full current state to Android on connect
+            if client_type == ClientType.ANDROID and self._state_resync:
+                try:
+                    await self._state_resync.send_full_state(client_id)
+                    client.resync_completed = True
+                except Exception as e:
+                    logger.error(f"State resync failed for {client_id}: {e}")
+            
             # Process first message (we already read it)
             await self._process_message(client, message)
             
             # Main receive loop
             async for raw in ws:
                 try:
-                    message = parse_message(raw, client.validator)
+                    raw_str = str(raw)
+
+                    # Max payload size check
+                    valid, err = self._validate_payload_size(raw_str, remote_ip)
+                    if not valid:
+                        self._audit_log.log_event(
+                            AuditEventType.PAYLOAD_TOO_LARGE,
+                            source_ip=remote_ip,
+                            client_id=client_id,
+                            details=err,
+                            severity="WARNING",
+                        )
+                        await self._send_error(ws, err, error_code="PAYLOAD_TOO_LARGE")
+                        continue
+
+                    # Rate limit check per message
+                    if not self._rate_limiter.check_rate_limit(remote_ip):
+                        self._audit_log.log_event(
+                            AuditEventType.RATE_LIMIT_HIT,
+                            source_ip=remote_ip,
+                            client_id=client_id,
+                            details="Rate limit hit during message processing",
+                            severity="WARNING",
+                        )
+                        await self._send_error(ws, "Rate limit exceeded", error_code="RATE_LIMITED")
+                        continue
+
+                    message = parse_message(raw_str, client.validator)
+
+                    # Full security validation on every message
+                    is_valid, sec_err = validate_message_security(
+                        message,
+                        hmac_secret=self._hmac_signer._secret_key.decode("utf-8") if self._hmac_signer._secret_key else "",
+                        max_message_age_ms=self._replay_protection.max_message_age_ms,
+                        seen_nonces=self._replay_protection._nonces,
+                        seen_message_ids=self._replay_protection._message_ids,
+                    )
+                    if not is_valid:
+                        self._audit_log.log_event(
+                            AuditEventType.SECURITY_VALIDATION_FAILED,
+                            source_ip=remote_ip,
+                            client_id=client_id,
+                            message_id=message.message_id,
+                            details=sec_err,
+                            severity="CRITICAL",
+                        )
+                        await self._send_error(ws, sec_err, error_code="SECURITY_VIOLATION")
+                        continue
+
+                    # Register message_id and nonce after validation passes
+                    if message.message_id:
+                        self._replay_protection.register_message_id(message.message_id)
+                    if message.nonce:
+                        self._replay_protection.register_nonce(message.nonce)
+
                     await self._process_message(client, message)
                 except ProtocolError as e:
+                    self._audit_log.log_event(
+                        AuditEventType.MALFORMED_MESSAGE,
+                        source_ip=remote_ip,
+                        client_id=client_id,
+                        details=str(e),
+                        severity="WARNING",
+                    )
                     logger.warning(f"Protocol error from {client_id}: {e}")
                     await self._send_error(ws, str(e))
                 except Exception as e:
@@ -348,13 +549,22 @@ class NexusWebSocketServer:
         else:
             logger.warning(f"Unhandled message type {msg_type} from {client.client_id}")
     
-    async def _send_error(self, ws: WebSocketServerProtocol, error_text: str) -> None:
-        """Send an error message to a client."""
+    async def _send_error(
+        self,
+        ws: WebSocketServerProtocol,
+        error_text: str,
+        error_code: str = "PROTOCOL_ERROR",
+    ) -> None:
+        """Send an error message to a client with proper error code."""
         self._sequence += 1
         msg = create_message(
             message_type=MessageType.ERROR,
             sequence=self._sequence,
-            payload={"error": error_text, "timestamp": now_ms()},
+            payload={
+                "error": error_text,
+                "error_code": error_code,
+                "timestamp": now_ms(),
+            },
         )
         try:
             await ws.send(serialize_message(msg))
@@ -386,30 +596,36 @@ class NexusWebSocketServer:
         logger.info(f"Client removed: {client_id}")
     
     async def broadcast_to_android(self, message: ProtocolMessage) -> None:
-        """Broadcast a message to all connected Android clients."""
-        data = serialize_message(message)
-        android_clients = [
-            c for c in self.clients.values()
-            if c.client_type == ClientType.ANDROID
-        ]
-        
-        if not android_clients:
-            logger.debug("No Android clients connected for broadcast")
-            return
-        
-        disconnected = []
-        for client in android_clients:
-            try:
-                await client.websocket.send(data)
-                client.last_seen = now_ms()
-            except websockets.ConnectionClosed:
-                disconnected.append(client.client_id)
-            except Exception as e:
-                logger.error(f"Broadcast error to {client.client_id}: {e}")
-                disconnected.append(client.client_id)
-        
-        for cid in disconnected:
-            await self._remove_client(cid)
+            """Broadcast a message to all connected Android clients."""
+            data = serialize_message(message)
+            android_clients = [
+                c for c in self.clients.values()
+                if c.client_type == ClientType.ANDROID
+            ]
+
+            if not android_clients:
+                logger.debug("No Android clients connected for broadcast")
+                return
+
+            disconnected = []
+            for client in android_clients:
+                try:
+                    # Increment per-client sequence and update message
+                    seq = self._next_client_sequence(client)
+                    message.sequence = seq
+                    # Re-serialize with updated sequence
+                    data = serialize_message(message)
+                    await client.websocket.send(data)
+                    client.last_seen = now_ms()
+                    client.messages_sent += 1
+                except websockets.ConnectionClosed:
+                    disconnected.append(client.client_id)
+                except Exception as e:
+                    logger.error(f"Broadcast error to {client.client_id}: {e}")
+                    disconnected.append(client.client_id)
+
+            for cid in disconnected:
+                await self._remove_client(cid)
     
     async def send_to_client(self, client_id: str, message: ProtocolMessage) -> bool:
         """Send a message to a specific client."""
@@ -508,6 +724,9 @@ class NexusWebSocketServer:
                 "symbol": c.symbol,
                 "last_seen": c.last_seen,
                 "last_sequence": c.last_sequence,
+                "outgoing_sequence": c.outgoing_sequence,
+                "messages_sent": c.messages_sent,
+                "resync_completed": c.resync_completed,
                 "is_stale": c.is_stale,
                 "remote": str(c.websocket.remote_address) if c.websocket.remote_address else "unknown",
             }
@@ -533,4 +752,13 @@ class NexusWebSocketServer:
                 "uptime_seconds": round(uptime, 1),
             },
             "auth_enabled": self._auth.enabled,
+            "hmac_enabled": self._hmac_signer.enabled,
+            "max_payload_bytes": self._max_payload_bytes,
+            "security": {
+                "auth_enabled": self._auth.enabled,
+                "hmac_enabled": self._hmac_signer.enabled,
+                "replay_protection": self._replay_protection.get_stats(),
+                "audit_events": self._audit_log.get_total_events(),
+                "audit_counters": self._audit_log.get_counters(),
+            },
         }

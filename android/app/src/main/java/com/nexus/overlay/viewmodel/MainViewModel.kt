@@ -17,6 +17,9 @@ import kotlinx.coroutines.launch
  * Main ViewModel managing all UI state and user actions.
  * Bridges SignalStore data to UI composables.
  * Loads/saves settings via SettingsManager (SharedPreferences).
+ *
+ * Tracks signal freshness, AI status, system status for the
+ * hardened Android overlay (Phase G).
  */
 class MainViewModel(
     private val signalStore: SignalStore,
@@ -85,9 +88,55 @@ class MainViewModel(
             }
         }
 
+        // --- Freshness observables (Phase G) ---
+        viewModelScope.launch {
+            signalStore.signalFreshness.collect { freshness ->
+                _uiState.update { it.copy(signalFreshness = freshness) }
+            }
+        }
+
+        viewModelScope.launch {
+            signalStore.signalAge.collect { age ->
+                _uiState.update { it.copy(signalAge = age) }
+            }
+        }
+
+        viewModelScope.launch {
+            signalStore.marketDataAge.collect { age ->
+                _uiState.update { it.copy(marketDataAge = age) }
+            }
+        }
+
+        viewModelScope.launch {
+            signalStore.aiStatus.collect { status ->
+                _uiState.update { it.copy(aiStatus = status) }
+            }
+        }
+
+        viewModelScope.launch {
+            signalStore.systemStatus.collect { status ->
+                _uiState.update { it.copy(systemStatus = status) }
+            }
+        }
+
+        // Start periodic freshness recalculation
+        startFreshnessPolling()
+
         // Auto-connect on startup if enabled
         if (_uiState.value.autoConnect) {
             connect()
+        }
+    }
+
+    /**
+     * Poll freshness every second to update age display.
+     */
+    private fun startFreshnessPolling() {
+        viewModelScope.launch {
+            while (true) {
+                signalStore.recalculateFreshness()
+                kotlinx.coroutines.delay(1000)
+            }
         }
     }
 
@@ -221,7 +270,13 @@ data class UiState(
     val autoConnect: Boolean = true,
     val alertOnSignal: Boolean = true,
     val alertOnSLHit: Boolean = false,
-    val needsOverlayPermission: Boolean = false
+    val needsOverlayPermission: Boolean = false,
+    // Phase G: Freshness fields
+    val signalFreshness: SignalFreshness = SignalFreshness.NO_SIGNAL,
+    val signalAge: Long = 0L,
+    val marketDataAge: Long = 0L,
+    val aiStatus: AiStatus = AiStatus.OFFLINE,
+    val systemStatus: String = ""
 )
 
 enum class OverlayMode {

@@ -499,6 +499,163 @@ class MarketDataEngine:
         )
         await self.on_candle(candle)
 
+    # ── Dual-path processing (audit section XVIII) ───────────────────────
+    # Tick path:  fast, lightweight — price, spread, freshness, signal monitoring
+    # Candle path: slow, full analysis — indicators, structure, strategy run
+
+    async def process_tick_fast(self, payload: dict) -> dict:
+        """
+        FAST TICK PATH — lightweight processing for every tick.
+
+        Does NOT trigger full engine analysis. Only:
+          - Validates tick price
+          - Tracks spread
+          - Updates freshness
+          - Emits MARKET_TICK for active signal monitoring
+
+        Returns a minimal result dict with the tick summary for
+        downstream consumers that need fast tick-level data.
+        """
+        bid = float(payload.get("bid", 0))
+        ask = float(payload.get("ask", 0))
+        volume = int(payload.get("volume", 0))
+        timestamp = int(payload.get("timestamp", now_ms()))
+        flags = int(payload.get("flags", 0))
+
+        mid = (bid + ask) / 2.0
+        spread = ask - bid
+
+        # Validate
+        if mid <= 0:
+            return {"valid": False, "reason": "invalid_price"}
+
+        # Track freshness
+        self._last_tick_time["M1"] = timestamp
+
+        # Spread monitoring (fast check)
+        if spread > MAX_SPREAD_PIPS:
+            self._spread_violations += 1
+
+        # Compute data age
+        last_candle_ts = self._last_candle_time.get("M1", 0)
+        data_age_ms = (timestamp - last_candle_ts) if last_candle_ts > 0 else 999999
+
+        # Determine if a candle boundary was crossed (check for M1)
+        candle_ts = self._floor_timestamp(timestamp, 60)
+        candle_crossed = False
+        if len(self._tick_buffer.get("M1", [])) > 0:
+            first_ts = self._tick_buffer["M1"][0].timestamp
+            first_candle_ts = self._floor_timestamp(first_ts, 60)
+            candle_crossed = candle_ts > first_candle_ts
+
+        # Append to tick buffer (same as on_tick but without full event publishing)
+        tick = TickData(
+            bid=bid, ask=ask, spread=spread,
+            volume=volume, timestamp=timestamp, flags=flags,
+        )
+        self._tick_buffer["M1"].append(tick)
+
+        # Emit lightweight MARKET_TICK for signal monitoring
+        await self._bus.publish(
+            EventType.MARKET_TICK,
+            source="market_data_engine",
+            payload={
+                "tick": tick,
+                "mid": mid,
+                "spread": spread,
+                "fast_path": True,
+                "data_age_ms": data_age_ms,
+            },
+        )
+
+        # If candle boundary crossed, close the candle (triggers aggregation)
+        if candle_crossed and self._tick_buffer["M1"]:
+            first_candle_ts = self._floor_timestamp(
+                self._tick_buffer["M1"][0].timestamp, 60
+            )
+            await self._close_candle_from_ticks("M1", first_candle_ts)
+
+        return {
+            "valid": True,
+            "fast_path": True,
+            "mid": mid,
+            "bid": bid,
+            "ask": ask,
+            "spread": spread,
+            "data_age_ms": data_age_ms,
+            "candle_crossed": candle_crossed,
+            "timestamp_ms": timestamp,
+        }
+
+    async def process_candle_full(self, payload: dict, timeframe: str = "M5") -> dict:
+        """
+        SLOW CANDLE PATH — full analysis on candle close.
+
+        Called when a candle closes on a significant timeframe.
+        Triggers the full analysis chain:
+          - Candle validation + deduplication
+          - Outlier detection
+          - Timeframe aggregation (lower → higher)
+          - CANDLE_CLOSED event (triggers indicator/structure/regime engines)
+          - Data quality recalculation
+
+        Returns a detailed result dict with analysis status.
+        """
+        candle = CandleData(
+            open=float(payload.get("open", 0)),
+            high=float(payload.get("high", 0)),
+            low=float(payload.get("low", 0)),
+            close=float(payload.get("close", 0)),
+            volume=int(payload.get("volume", 0)),
+            spread=float(payload.get("spread", 0)),
+            timestamp=int(payload.get("timestamp", now_ms())),
+            timeframe=timeframe,
+            complete=True,
+        )
+
+        # Process via the existing full pipeline
+        await self.on_candle(candle)
+
+        # Compute current data quality after candle processing
+        dq = self.get_data_quality()
+
+        # Return detailed analysis result
+        return {
+            "valid": True,
+            "fast_path": False,
+            "timeframe": timeframe,
+            "candle_timestamp": candle.timestamp,
+            "candle_close": candle.close,
+            "aggregated_higher": AGGREGATION_CHAIN.get(timeframe),
+            "data_quality_score": dq.score,
+            "is_fresh": dq.is_fresh,
+            "dirty_timeframes": list(self._dirty_timeframes),
+            "timestamp_ms": now_ms(),
+        }
+
+    # ── Signal monitoring helpers (for active signal tracking on ticks) ──
+
+    def get_tick_freshness(self) -> Dict[str, Any]:
+        """
+        Quick freshness check for active signal monitoring.
+        Returns a lightweight dict with freshness metrics.
+        """
+        now = now_ms()
+        last_tick = self._last_tick_time.get("M1", 0)
+        last_candle = self._last_candle_time.get("M1", 0)
+
+        tick_age_ms = (now - last_tick) if last_tick > 0 else 999999
+        candle_age_ms = (now - last_candle) if last_candle > 0 else 999999
+
+        return {
+            "tick_age_ms": tick_age_ms,
+            "candle_age_ms": candle_age_ms,
+            "tick_fresh": tick_age_ms < 5000,
+            "candle_fresh": candle_age_ms < 60_000,
+            "spread": self.get_latest_spread(),
+            "current_price": self.get_current_price(),
+        }
+
     def get_last_tick_time(self) -> int:
         """Return timestamp of last tick (ms), 0 if none."""
         return self._last_tick_time.get("M1", 0)

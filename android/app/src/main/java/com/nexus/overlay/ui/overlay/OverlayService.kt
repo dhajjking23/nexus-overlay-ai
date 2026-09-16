@@ -1,11 +1,15 @@
 package com.nexus.overlay.ui.overlay
 
 import android.app.*
-import android.content.pm.ServiceInfo
+import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
+import android.util.DisplayMetrics
+import android.util.Log
 import android.view.*
 import android.widget.FrameLayout
 import androidx.compose.runtime.*
@@ -21,6 +25,12 @@ import kotlinx.coroutines.*
 /**
  * Foreground service that manages the floating overlay window.
  * Supports Compact, Standard, and Pro modes with dragging and resizing.
+ *
+ * Handles:
+ * - Overlay permission loss gracefully (Section XL/39)
+ * - Screen rotation, different DPI, notch, navigation bar (Section G)
+ * - Android 14/15 foreground service requirements (Section 40)
+ * - Stale signal protection awareness (Section 41)
  */
 class OverlayService : Service() {
 
@@ -30,6 +40,7 @@ class OverlayService : Service() {
     private var signalStore: SignalStore? = null
     private var currentMode: OverlayMode = OverlayMode.STANDARD
     private var currentOpacity: Float = 0.85f
+    private var hasOverlayPermission = false
 
     // Drag state
     private var initialX = 0
@@ -37,6 +48,10 @@ class OverlayService : Service() {
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
+
+    // Freshness recalculation job
+    private var freshnessJob: Job? = null
+    private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -55,8 +70,10 @@ class OverlayService : Service() {
                 currentOpacity = intent.getFloatExtra(EXTRA_OPACITY, 0.85f)
                 startForegroundWithNotification()
                 showOverlay()
+                startFreshnessRecalculation()
             }
             ACTION_STOP -> {
+                stopFreshnessRecalculation()
                 hideOverlay()
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
@@ -76,10 +93,34 @@ class OverlayService : Service() {
     }
 
     override fun onDestroy() {
+        stopFreshnessRecalculation()
         hideOverlay()
+        serviceScope.cancel()
         super.onDestroy()
     }
 
+    /**
+     * Recalculate signal freshness every second for the overlay.
+     */
+    private fun startFreshnessRecalculation() {
+        stopFreshnessRecalculation()
+        freshnessJob = serviceScope.launch {
+            while (isActive) {
+                delay(1000)
+                signalStore?.recalculateFreshness()
+            }
+        }
+    }
+
+    private fun stopFreshnessRecalculation() {
+        freshnessJob?.cancel()
+        freshnessJob = null
+    }
+
+    /**
+     * Section XL/39: Handle foreground service for Android 14+.
+     * Properly declares foregroundServiceType for specialUse.
+     */
     private fun startForegroundWithNotification() {
         val channelId = NexusOverlayApp.CHANNEL_OVERLAY
         val notification = NotificationCompat.Builder(this, channelId)
@@ -91,31 +132,68 @@ class OverlayService : Service() {
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .build()
 
+        // Android 14 (UPSIDE_DOWN_CAKE) requires explicit foreground service type
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
     }
 
+    /**
+     * Show the overlay window with proper layout params.
+     * Handles screen dimensions, notch, navigation bar.
+     * Section XL/39: Overlay is visualization layer, not chart source of truth.
+     */
     private fun showOverlay() {
         if (overlayView != null) return
+
+        // Check overlay permission first (Section XL: graceful permission loss)
+        if (!Settings.canDrawOverlays(this)) {
+            Log.w(TAG, "Overlay permission not granted — cannot show overlay")
+            hasOverlayPermission = false
+            // Notify the app about permission loss
+            sendPermissionLossBroadcast()
+            return
+        }
+        hasOverlayPermission = true
 
         val context = this
         val modeConfig = getModeConfig(currentMode)
 
+        // Get display metrics for proper sizing across DPI/screen sizes
+        val displayMetrics = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        windowManager?.defaultDisplay?.getMetrics(displayMetrics)
+
+        // Get safe area insets for notch and navigation bar
+        val stableInsets = getStableInsets()
+
+        // Calculate overlay dimensions considering DPI
+        val overlayWidth = modeConfig.width.dpToPx(displayMetrics.density)
+        val overlayHeight = modeConfig.height.dpToPx(displayMetrics.density)
+
+        // Initial position: top-right area, accounting for status bar/notch
+        val initialPosX = 20
+        val initialPosY = stableInsets.top + 20
+
         layoutParams = WindowManager.LayoutParams(
-            modeConfig.width,
-            modeConfig.height,
+            overlayWidth,
+            overlayHeight,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            // Section XL/39: FLAG_NOT_FOCUSABLE ensures other apps can still be used
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                     WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = 20
-            y = 100
+            x = initialPosX
+            y = initialPosY
         }
 
         // Create Compose overlay view
@@ -136,8 +214,15 @@ class OverlayService : Service() {
             }
         }
 
-        // Set up drag handling
+        // Set up drag handling with boundary clamping
         composeView.setOnTouchListener { _, event ->
+            // If overlay permission was revoked, stop dragging
+            if (!Settings.canDrawOverlays(this@OverlayService)) {
+                hasOverlayPermission = false
+                sendPermissionLossBroadcast()
+                return@setOnTouchListener false
+            }
+
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
                     initialX = layoutParams?.x ?: 0
@@ -154,11 +239,31 @@ class OverlayService : Service() {
                         isDragging = true
                     }
                     if (isDragging) {
-                        layoutParams?.x = initialX + dx.toInt()
-                        layoutParams?.y = initialY + dy.toInt()
+                        // Calculate new position
+                        val newX = initialX + dx.toInt()
+                        val newY = initialY + dy.toInt()
+
+                        // Clamp to screen bounds
+                        val screenWidth = displayMetrics.widthPixels
+                        val screenHeight = displayMetrics.heightPixels
+                        val clampedX = newX.coerceIn(0, screenWidth - overlayWidth)
+                        val clampedY = newY.coerceIn(
+                            stableInsets.top,
+                            screenHeight - overlayHeight - stableInsets.bottom
+                        )
+
+                        layoutParams?.x = clampedX
+                        layoutParams?.y = clampedY
                         try {
                             windowManager?.updateViewLayout(overlayView, layoutParams)
-                        } catch (_: Exception) {}
+                        } catch (e: WindowManager.BadTokenException) {
+                            // Overlay was removed by system
+                            Log.w(TAG, "BadTokenException during drag — overlay lost")
+                            hasOverlayPermission = false
+                            sendPermissionLossBroadcast()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to update overlay layout: ${e.message}")
+                        }
                     }
                     true
                 }
@@ -172,8 +277,19 @@ class OverlayService : Service() {
         overlayView = composeView
         try {
             windowManager?.addView(overlayView, layoutParams)
+        } catch (e: SecurityException) {
+            // Permission not granted
+            Log.e(TAG, "SecurityException: overlay permission not granted")
+            overlayView = null
+            hasOverlayPermission = false
+            sendPermissionLossBroadcast()
+        } catch (e: WindowManager.BadTokenException) {
+            Log.e(TAG, "BadTokenException: overlay window token invalid")
+            overlayView = null
+            hasOverlayPermission = false
+            sendPermissionLossBroadcast()
         } catch (e: Exception) {
-            // Permission not granted or other issue
+            Log.e(TAG, "Failed to add overlay view: ${e.message}")
             overlayView = null
         }
     }
@@ -182,7 +298,12 @@ class OverlayService : Service() {
         overlayView?.let { view ->
             try {
                 windowManager?.removeView(view)
-            } catch (_: Exception) {}
+            } catch (e: IllegalArgumentException) {
+                // View was already removed
+                Log.d(TAG, "Overlay view already removed")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to remove overlay view: ${e.message}")
+            }
         }
         overlayView = null
     }
@@ -194,6 +315,41 @@ class OverlayService : Service() {
 
     private fun updateOpacity() {
         overlayView?.alpha = currentOpacity
+    }
+
+    /**
+     * Get stable insets for notch, status bar, navigation bar.
+     * This ensures overlay is placed within the usable display area.
+     */
+    private fun getStableInsets(): Insets {
+        val statusBarHeight = getStatusBarHeight()
+        val navBarHeight = getNavigationBarHeight()
+        return Insets(top = statusBarHeight, bottom = navBarHeight)
+    }
+
+    private fun getStatusBarHeight(): Int {
+        val resourceId = resources.getIdentifier("status_bar_height", "dimen", "android")
+        return if (resourceId > 0) resources.getDimensionPixelSize(resourceId) else 0
+    }
+
+    private fun getNavigationBarHeight(): Int {
+        val resourceId = resources.getIdentifier("navigation_bar_height", "dimen", "android")
+        return if (resourceId > 0) resources.getDimensionPixelSize(resourceId) else 0
+    }
+
+    /**
+     * Send broadcast to notify app about permission loss.
+     */
+    private fun sendPermissionLossBroadcast() {
+        val intent = Intent(ACTION_PERMISSION_LOST)
+        sendBroadcast(intent)
+        // Stop the service gracefully
+        serviceScope.launch {
+            delay(500)
+            hideOverlay()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        }
     }
 
     private fun getModeConfig(mode: OverlayMode): ModeConfig {
@@ -216,13 +372,22 @@ class OverlayService : Service() {
         }
     }
 
-    data class ModeConfig(val width: Int, val height: Int, val name: String)
+    private data class ModeConfig(val width: Int, val height: Int, val name: String)
+
+    private data class Insets(val top: Int, val bottom: Int)
+
+    /**
+     * Convert dp to px for proper sizing across different DPIs.
+     */
+    private fun Int.dpToPx(density: Float): Int = (this * density + 0.5f).toInt()
 
     companion object {
+        private const val TAG = "OverlayService"
         const val ACTION_START = "com.nexus.overlay.START"
         const val ACTION_STOP = "com.nexus.overlay.STOP"
         const val ACTION_UPDATE_MODE = "com.nexus.overlay.UPDATE_MODE"
         const val ACTION_UPDATE_OPACITY = "com.nexus.overlay.UPDATE_OPACITY"
+        const val ACTION_PERMISSION_LOST = "com.nexus.overlay.PERMISSION_LOST"
         const val EXTRA_MODE = "overlay_mode"
         const val EXTRA_OPACITY = "overlay_opacity"
         private const val NOTIFICATION_ID = 1001

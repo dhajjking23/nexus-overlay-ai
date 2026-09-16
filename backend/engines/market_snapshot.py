@@ -42,33 +42,98 @@ class ClockDiscipline:
 
     From audit section XVII: Must track broker_time, server_time,
     local_time, received_time, processed_time, decision_time.
+
+    Latency chain:
+      broker_time_ms  ──market_to_backend──▶  received_time_ms
+                                              │
+                                       processed_time_ms
+                                              │
+                                    ──analysis_latency──▶
+                                              │
+                                    ──decision_latency──▶ decision_time_ms
+                                              │
+                                  ──broadcast_latency──▶ broadcast_time_ms
+
+    Total: end_to_end_latency = broker → broadcast
     """
     broker_time_ms: int = 0       # When the broker generated the tick/candle
+    server_time_ms: int = 0       # VPS wall-clock when data object was created
     received_time_ms: int = 0     # When VPS received the data
     processed_time_ms: int = 0    # When engines started processing
     decision_time_ms: int = 0     # When decision was made
-    android_sent_time_ms: int = 0 # When signal was sent to Android
+    broadcast_time_ms: int = 0    # When signal was broadcast to Android
+
+    # ── Latency measurement properties ──────────────────────────────────
 
     @property
-    def ingestion_latency_ms(self) -> float:
-        """Time from broker to VPS receipt."""
+    def market_to_backend_ms(self) -> float:
+        """Market (broker) → VPS receipt latency."""
         if self.received_time_ms > 0 and self.broker_time_ms > 0:
             return self.received_time_ms - self.broker_time_ms
         return 0.0
 
     @property
-    def processing_latency_ms(self) -> float:
-        """Time from processing start to decision."""
+    def analysis_latency_ms(self) -> float:
+        """Engine processing start → analysis complete (pre-decision)."""
+        if self.decision_time_ms > 0 and self.processed_time_ms > 0:
+            # Analysis is the bulk of processing before final decision
+            return self.decision_time_ms - self.processed_time_ms
+        return 0.0
+
+    @property
+    def decision_latency_ms(self) -> float:
+        """Decision computation time (from processed to decision)."""
         if self.decision_time_ms > 0 and self.processed_time_ms > 0:
             return self.decision_time_ms - self.processed_time_ms
         return 0.0
 
     @property
-    def end_to_end_latency_ms(self) -> float:
-        """Time from broker to decision."""
-        if self.decision_time_ms > 0 and self.broker_time_ms > 0:
-            return self.decision_time_ms - self.broker_time_ms
+    def broadcast_latency_ms(self) -> float:
+        """Decision → broadcast to Android."""
+        if self.broadcast_time_ms > 0 and self.decision_time_ms > 0:
+            return self.broadcast_time_ms - self.decision_time_ms
         return 0.0
+
+    @property
+    def end_to_end_latency_ms(self) -> float:
+        """Total latency from broker to broadcast. Primary KPI."""
+        end = self.broadcast_time_ms if self.broadcast_time_ms > 0 else self.decision_time_ms
+        if end > 0 and self.broker_time_ms > 0:
+            return end - self.broker_time_ms
+        return 0.0
+
+    # ── Backward-compatible aliases ──────────────────────────────────────
+
+    @property
+    def ingestion_latency_ms(self) -> float:
+        """Alias for market_to_backend_ms (backward compat)."""
+        return self.market_to_backend_ms
+
+    @property
+    def processing_latency_ms(self) -> float:
+        """Alias for analysis_latency_ms (backward compat)."""
+        return self.analysis_latency_ms
+
+    def snapshot(self) -> Dict[str, int]:
+        """Return all timestamps as a dictionary for serialization."""
+        return {
+            "broker_time_ms": self.broker_time_ms,
+            "server_time_ms": self.server_time_ms,
+            "received_time_ms": self.received_time_ms,
+            "processed_time_ms": self.processed_time_ms,
+            "decision_time_ms": self.decision_time_ms,
+            "broadcast_time_ms": self.broadcast_time_ms,
+        }
+
+    def latency_report(self) -> Dict[str, float]:
+        """Return all latency measurements as a dictionary."""
+        return {
+            "market_to_backend_ms": self.market_to_backend_ms,
+            "analysis_latency_ms": self.analysis_latency_ms,
+            "decision_latency_ms": self.decision_latency_ms,
+            "broadcast_latency_ms": self.broadcast_latency_ms,
+            "end_to_end_latency_ms": self.end_to_end_latency_ms,
+        }
 
 
 @dataclass
@@ -213,12 +278,8 @@ class MarketSnapshot:
             "session_name": self.session_name,
             "regime": self.regime,
             "clock": {
-                "broker_time_ms": self.clock.broker_time_ms,
-                "received_time_ms": self.clock.received_time_ms,
-                "processed_time_ms": self.clock.processed_time_ms,
-                "decision_time_ms": self.clock.decision_time_ms,
-                "ingestion_latency_ms": self.clock.ingestion_latency_ms,
-                "processing_latency_ms": self.clock.processing_latency_ms,
+                **self.clock.snapshot(),
+                "latency": self.clock.latency_report(),
             },
             "symbol_spec": {
                 "digits": self.symbol_spec.digits,

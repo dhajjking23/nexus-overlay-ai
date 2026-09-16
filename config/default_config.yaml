@@ -54,6 +54,25 @@ transport:
   health_port: 8767  # Health check endpoint
   rate_limit_per_minute: 120
 
+# --- Security Configuration ---
+# Auth is ENABLED by default in production. Set auth_enabled to false
+# only for local development/testing. HMAC, replay protection, and
+# rate limiting are all active by default.
+security:
+  # Enable/disable authentication (DEFAULT: true — production safe)
+  auth_enabled: true
+  # HMAC secret key for message signing (generate a new one for each deployment)
+  # Generate with: python -c "import secrets; print(secrets.token_urlsafe(32))"
+  hmac_secret: ""
+  # Maximum message age in milliseconds (reject stale messages)
+  max_message_age_ms: 30000
+  # Maximum payload size in bytes (1MB default)
+  max_payload_size: 1048576
+  # Rate limit per minute per IP
+  rate_limit_per_minute: 120
+  # Nonce expiry in seconds (for replay protection)
+  nonce_expiry_s: 300
+
 # --- Indicator Configuration ---
 indicators:
   trend:

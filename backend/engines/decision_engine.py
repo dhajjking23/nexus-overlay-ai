@@ -158,6 +158,10 @@ class DecisionResult:
 
     This replaces free-text evidence strings with structured data
     that can be audited, replayed, and consumed by the Android overlay.
+
+    Every decision references its snapshot_id for atomic reproducibility
+    (audit section XLIV). decision_timestamp_ms records when the decision
+    was finalized (from snapshot.clock.decision_time_ms).
     """
 
     def __init__(
@@ -170,6 +174,7 @@ class DecisionResult:
         thesis: TradeThesis,
         snapshot_id: str,
         timestamp_ms: int,
+        decision_timestamp_ms: int = 0,
     ) -> None:
         self.decision = decision
         self.reason_codes = reason_codes
@@ -179,6 +184,8 @@ class DecisionResult:
         self.thesis = thesis
         self.snapshot_id = snapshot_id
         self.timestamp_ms = timestamp_ms
+        # Explicit decision timestamp (from snapshot clock discipline)
+        self.decision_timestamp_ms = decision_timestamp_ms or timestamp_ms
         self.signal_id: str = ""  # Set when signal is created
 
     @property
@@ -210,6 +217,7 @@ class DecisionResult:
             "thesis_id": self.thesis.thesis_id,
             "snapshot_id": self.snapshot_id,
             "timestamp_ms": self.timestamp_ms,
+            "decision_timestamp_ms": self.decision_timestamp_ms,
             "signal_id": self.signal_id,
             "entry": self.thesis.entry,
             "sl": self.thesis.sl,
@@ -663,6 +671,11 @@ class DecisionEngine:
             thesis=thesis,
             snapshot_id=snapshot.snapshot_id,
             timestamp_ms=int(time.time() * 1000),
+            decision_timestamp_ms=(
+                snapshot.clock.decision_time_ms
+                if snapshot.clock.decision_time_ms > 0
+                else int(time.time() * 1000)
+            ),
         )
 
         return result

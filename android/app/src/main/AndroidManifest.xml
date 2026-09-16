@@ -6,16 +6,19 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
-    <!-- Overlay permission -->
+    <!-- Overlay permission (required for floating window) -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
-    <!-- Foreground service -->
+    <!-- Foreground service (Android 14+ requires explicit type declaration) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Wake lock for keeping connection alive -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- For screen rotation/DPI/notch handling -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
 
     <application
         android:name=".NexusOverlayApp"
@@ -32,14 +35,16 @@
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.NexusOverlay"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:configChanges="orientation|screenSize|screenLayout|density|keyboardHidden|uiMode"
+            android:resizeableActivity="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- Overlay Service -->
+        <!-- Overlay Service - Android 14+ requires foregroundServiceType declaration -->
         <service
             android:name=".ui.overlay.OverlayService"
             android:exported="false"
