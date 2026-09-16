@@ -38,7 +38,7 @@ class LiquiditySweepStrategy(BaseStrategy):
 
     name = "liquidity_sweep"
     weight = 0.20
-    min_data_quality = 0.4
+    min_data_quality = 40.0  # 0-100 scale
     min_candles = 5
 
     def __init__(self, config: dict[str, Any] | None = None):

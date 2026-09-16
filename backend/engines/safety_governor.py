@@ -82,14 +82,18 @@ class SafetyGovernor:
         self._check_count = 0
         self._block_count = 0
 
-        # Thresholds with sane defaults
-        self.max_spread_pips = self._config.get("max_spread_pips", 50.0)
-        self.max_data_age_ms = self._config.get("max_data_age_ms", 30_000)
-        self.min_data_quality = self._config.get("min_data_quality", 0.3)
-        self.min_rr = self._config.get("min_risk_reward", 1.0)
-        self.max_volatility_mult = self._config.get("max_volatility_multiplier", 5.0)
-        self.min_candles_required = self._config.get("min_candles", 1)
-        self.pip_value = self._config.get("pip_value", 0.01)  # for XAUUSD
+        # Thresholds — all on 0-100 scale for data quality
+        safety_cfg = self._config
+        risk_cfg = (config or {}).get("risk", {})
+        dq_cfg = (config or {}).get("data_quality", {})
+        sym_cfg = (config or {}).get("symbol", {})
+        self.max_spread_pips = safety_cfg.get("max_spread", risk_cfg.get("max_spread", 1.0)) / max(sym_cfg.get("point", 0.01), 0.0001)
+        self.max_data_age_ms = risk_cfg.get("stale_data_threshold_ms", safety_cfg.get("stale_data_threshold_ms", 30_000))
+        self.min_data_quality = dq_cfg.get("minimum_threshold", 50.0)  # 0-100 scale (was 0.3!)
+        self.min_rr = risk_cfg.get("min_rr", safety_cfg.get("min_risk_reward", 1.0))
+        self.max_volatility_mult = safety_cfg.get("max_volatility_atr_multiplier", 5.0)
+        self.min_candles_required = safety_cfg.get("min_candles", 1)
+        self.pip_value = sym_cfg.get("point", 0.01)  # for XAUUSD
 
     async def start(self) -> None:
         if self._running:
@@ -260,19 +264,19 @@ class SafetyGovernor:
         if data_quality < self.min_data_quality:
             self._add_check(
                 checks, "data_quality", False, "BLOCK",
-                f"Data quality too low: {data_quality:.2f} < {self.min_data_quality}"
+                f"Data quality too low: {data_quality:.1f} < {self.min_data_quality}"
             )
-            blocks.append(f"Data quality: {data_quality:.2f}")
+            blocks.append(f"Data quality: {data_quality:.1f}")
         elif data_quality < self.min_data_quality * 1.5:
             self._add_check(
                 checks, "data_quality", True, "WARNING",
-                f"Data quality marginal: {data_quality:.2f}"
+                f"Data quality marginal: {data_quality:.1f}"
             )
-            warnings.append(f"Data quality marginal: {data_quality:.2f}")
+            warnings.append(f"Data quality marginal: {data_quality:.1f}")
         else:
             self._add_check(
                 checks, "data_quality", True, "INFO",
-                f"Data quality OK: {data_quality:.2f}"
+                f"Data quality OK: {data_quality:.1f}"
             )
 
         # ═══════════════════════════════════════════

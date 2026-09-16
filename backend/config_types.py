@@ -103,7 +103,7 @@ class PipelineResult:
     market_state: MarketState = field(default_factory=MarketState)
     safety_check: EngineResult = field(default_factory=EngineResult)
     risk_check: EngineResult = field(default_factory=EngineResult)
-    confidence: float = 0.0
+    decision_score: float = 0.0  # 0-100 scale (was 'confidence')
     evidence: list = field(default_factory=list)
     engine_results: dict[str, EngineResult] = field(default_factory=dict)
     execution_time_ms: float = 0.0

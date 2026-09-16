@@ -16,9 +16,11 @@ class RiskEngine:
         self._event_bus = event_bus
         rc = self._config.get("risk", {})
         self._min_rr = rc.get("min_rr", 1.5)
-        self._min_conf = rc.get("min_confidence", 70)
+        self._min_conf = rc.get("min_confidence", 70)  # 0-100 scale
         self._max_spread = rc.get("max_spread", 1.0)
-        self._stale_threshold = self._config.get("safety", {}).get("stale_data_threshold_ms", 10000)
+        self._stale_threshold = rc.get("stale_data_threshold_ms", 10000)
+        self._max_daily_trades = rc.get("max_daily_trades", 10)
+        self._signal_expiry = rc.get("signal_expiry_candles", 5)
 
     def validate(self, spread: float, volatility_atr: float, rr: float,
                  sl_distance: float, tp1_distance: float,

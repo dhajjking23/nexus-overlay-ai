@@ -46,11 +46,35 @@ class StrategyEngine:
         self._initialize_strategies()
 
     def _initialize_strategies(self) -> None:
-        """Load all strategies from registry with config overrides."""
+        """Load strategies from registry, applying enabled list and weights from YAML.
+
+        YAML config structure:
+            strategies:
+              enabled: [trend_following, pullback, ...]
+              weights:
+                trend_following: 15
+                pullback: 15
+        """
         strategy_configs = self.config.get("strategies", {})
+        enabled_list = strategy_configs.get("enabled", [])
+        weights_map = strategy_configs.get("weights", {})
+        use_enabled_filter = bool(enabled_list)
 
         for name, cls in STRATEGY_REGISTRY.items():
-            cfg = strategy_configs.get(name, {})
+            # Determine if this strategy is enabled
+            strategy_enabled = name in enabled_list if use_enabled_filter else True
+
+            # Build per-strategy config: apply weight from YAML
+            weight_val = weights_map.get(name, None)
+            cfg = {"enabled": strategy_enabled}
+            if weight_val is not None:
+                cfg["weight"] = weight_val
+
+            # Also merge any strategy-specific config dict if present
+            strategy_specific = strategy_configs.get(name, {})
+            if isinstance(strategy_specific, dict):
+                cfg.update(strategy_specific)
+
             try:
                 strategy = cls(config=cfg)
                 self._strategies[name] = strategy

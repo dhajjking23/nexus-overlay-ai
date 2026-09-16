@@ -35,7 +35,7 @@ class PullbackStrategy(BaseStrategy):
 
     name = "pullback"
     weight = 0.20
-    min_data_quality = 0.4
+    min_data_quality = 40.0  # 0-100 scale
     min_candles = 15
     required_indicators = ["EMA_21", "EMA_50"]
 

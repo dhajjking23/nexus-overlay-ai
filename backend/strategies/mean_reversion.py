@@ -33,7 +33,7 @@ class MeanReversionStrategy(BaseStrategy):
 
     name = "mean_reversion"
     weight = 0.10
-    min_data_quality = 0.3
+    min_data_quality = 30.0  # 0-100 scale
     min_candles = 20
     required_indicators = ["BB_UPPER_20", "BB_LOWER_20", "BB_MIDDLE_20", "RSI_14", "ATR_14"]
 

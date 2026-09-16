@@ -48,7 +48,7 @@ class MarketState:
     mtf: Optional[MultiTimeframeAnalysis] = None
     regime: MarketRegime = MarketRegime.UNCERTAIN
     session: SessionType = SessionType.ASIAN
-    data_quality: float = 1.0  # 0.0–1.0
+    data_quality: float = 100.0  # 0-100 scale (was 1.0, wrong scale)
     data_age_ms: int = 0  # ms since last data point
     timestamp: int = field(default_factory=now_ms)
 
@@ -96,7 +96,7 @@ class BaseStrategy(ABC):
     name: str = "base"
     weight: float = 0.5
     # Minimum data quality required for this strategy to produce a signal
-    min_data_quality: float = 0.3
+    min_data_quality: float = 30.0  # 0-100 scale (was 0.3, wrong scale)
     # Minimum number of candles needed
     min_candles: int = 2
     # Required timeframes this strategy needs indicators for
@@ -124,7 +124,7 @@ class BaseStrategy(ABC):
         if state.candle_count < self.min_candles:
             return False, f"Insufficient candles: {state.candle_count} < {self.min_candles}"
         if state.data_quality < self.min_data_quality:
-            return False, f"Data quality too low: {state.data_quality:.2f} < {self.min_data_quality}"
+            return False, f"Data quality too low: {state.data_quality:.1f} < {self.min_data_quality}"
         if state.spread <= 0:
             return False, "Invalid spread"
         if state.price <= 0:

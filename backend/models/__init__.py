@@ -467,7 +467,7 @@ class ConfidenceModel:
 class TradingSignal:
     """Complete trading signal - THE FINAL OUTPUT"""
     decision: DecisionState
-    confidence: int  # 0-100
+    confidence: int  # 0-100, canonical score (formerly named 'confidence')
     symbol: str
     entry: float
     sl: float
@@ -490,11 +490,18 @@ class TradingSignal:
     confidence_model: Optional[ConfidenceModel] = None
     ai_assessment: Optional[AIAssessment] = None
     data_quality_score: float = 100.0
-    
+
+    @property
+    def decision_score(self) -> int:
+        """Canonical score name per audit spec. Returns confidence value (0-100)."""
+        return self.confidence
+
     def to_dict(self) -> dict:
+        score = self.confidence
         return {
             "decision": self.decision.value,
-            "confidence": self.confidence,
+            "confidence": score,
+            "decision_score": score,
             "symbol": self.symbol,
             "entry": self.entry,
             "sl": self.sl,
@@ -528,7 +535,7 @@ class DecisionLogEntry:
     symbol: str
     timeframe: str
     decision: DecisionState
-    confidence: int
+    decision_score: int  # 0-100
     entry: float
     sl: float
     tp1: float

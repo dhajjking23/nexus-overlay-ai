@@ -4,6 +4,11 @@ NEXUS OVERLAY AI - Engines Package
 Engine Pipeline:
 Market Data -> Indicators -> Structure -> Liquidity -> Zones -> MTF ->
 Session -> Regime -> Strategies -> Risk -> Entry/SL/TP -> Confidence -> Decision
+
+PHASE C additions:
+  EvidenceGraph (directional evidence aggregation)
+  TradeThesis (canonical trading thesis)
+  MarketSnapshot (atomic decision-time snapshot)
 """
 from backend.engines.market_data_engine import MarketDataEngine
 from backend.engines.indicator_engine import IndicatorEngine
@@ -21,13 +26,39 @@ from backend.engines.entry_engine import EntryEngine
 from backend.engines.sl_engine import SLEngine
 from backend.engines.tp_engine import TPEngine
 from backend.engines.confidence_model import ConfidenceModelEngine
-from backend.engines.decision_engine import DecisionEngine, DecisionEngineOutput
+from backend.engines.decision_engine import (
+    DecisionEngine, DecisionEngineOutput, DecisionResult, ReasonCode,
+)
 from backend.engines.safety_governor import SafetyGovernor, SafetyVerdict
+from backend.engines.evidence_graph import (
+    EvidenceGraph, EvidenceAssessment, EvidenceItem,
+    ConflictSeverity, MissingConfirmation, InvalidationCondition,
+)
+from backend.engines.trade_thesis import (
+    TradeThesis, Direction, SetupType, MarketRegime, HTFBias,
+    EvidenceRef, RiskFlag, create_wait_thesis, create_no_trade_thesis,
+)
+from backend.engines.market_snapshot import (
+    MarketSnapshot, ClockDiscipline, DataSource,
+    SymbolSpecification, generate_snapshot_id,
+)
 
 __all__ = [
+    # Existing engines
     "MarketDataEngine", "IndicatorEngine", "PriceActionEngine",
     "StructureEngine", "LiquidityEngine", "ZoneEngine", "MTFEngine",
     "SessionEngine", "RegimeEngine", "StrategyEngine", "ConfluenceEngine",
     "RiskEngine", "EntryEngine", "SLEngine", "TPEngine", "ConfidenceModelEngine",
     "DecisionEngine", "DecisionEngineOutput", "SafetyGovernor", "SafetyVerdict",
+    # PHASE C — Decision Result
+    "DecisionResult", "ReasonCode",
+    # PHASE C — Evidence Graph
+    "EvidenceGraph", "EvidenceAssessment", "EvidenceItem",
+    "ConflictSeverity", "MissingConfirmation", "InvalidationCondition",
+    # PHASE C — Trade Thesis
+    "TradeThesis", "Direction", "SetupType", "MarketRegime", "HTFBias",
+    "EvidenceRef", "RiskFlag", "create_wait_thesis", "create_no_trade_thesis",
+    # PHASE C — Market Snapshot
+    "MarketSnapshot", "ClockDiscipline", "DataSource",
+    "SymbolSpecification", "generate_snapshot_id",
 ]

@@ -37,7 +37,7 @@ class TrendFollowingStrategy(BaseStrategy):
 
     name = "trend_following"
     weight = 0.25
-    min_data_quality = 0.4
+    min_data_quality = 40.0  # 0-100 scale
     min_candles = 10
     required_indicators = ["ADX", "EMA_9", "EMA_21", "EMA_50"]
 

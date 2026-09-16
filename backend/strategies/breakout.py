@@ -32,7 +32,7 @@ class BreakoutStrategy(BaseStrategy):
 
     name = "breakout"
     weight = 0.15
-    min_data_quality = 0.4
+    min_data_quality = 40.0  # 0-100 scale
     min_candles = 20
     required_indicators = ["ATR_14", "VOLUME_SMA_20"]
 

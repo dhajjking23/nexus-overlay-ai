@@ -33,7 +33,7 @@ class ScalpingStrategy(BaseStrategy):
 
     name = "scalping"
     weight = 0.10
-    min_data_quality = 0.5  # higher quality needed for scalping
+    min_data_quality = 50.0  # 0-100 scale, higher quality needed for scalping
     min_candles = 10
     required_indicators = ["ATR_14"]
 
