@@ -458,11 +458,33 @@ class NexusOverlayApp:
         buy_count = sum(1 for a in active_assessments if a.direction == DecisionState.BUY)
         sell_count = sum(1 for a in active_assessments if a.direction == DecisionState.SELL)
 
+        # Use directional confluence as primary authority (P0 — audit section 21)
+        # Confluence has: bullish_score, bearish_score, net_directional_score, conflict_score
+        confluence_direction = None
+        if conf and hasattr(conf, 'net_directional_score'):
+            if conf.net_directional_score > 10 and conf.directional_agreement > 50:
+                confluence_direction = "BUY"
+            elif conf.net_directional_score < -10 and conf.directional_agreement > 50:
+                confluence_direction = "SELL"
+            # If conflict_score is HIGH/CRITICAL, force no direction
+            if conf.conflict_score > 70:
+                confluence_direction = None
+
+        # Strategy voting as supporting evidence
+        strategy_direction = None
         if buy_count >= sell_count and buy_count > 0:
-            trade_direction = "BUY"
+            strategy_direction = "BUY"
         elif sell_count > buy_count:
-            trade_direction = "SELL"
+            strategy_direction = "SELL"
+
+        # Final direction: confluence authority > strategy voting
+        if confluence_direction is not None:
+            trade_direction = confluence_direction
         else:
+            trade_direction = strategy_direction
+
+        # If no clear direction, trade_direction = None (will result in WAIT)
+        if trade_direction is None:
             trade_direction = None  # no active direction
 
         # ── 13. Entry Engine (NEW — was skipped) ───────────────────────
@@ -476,33 +498,55 @@ class NexusOverlayApp:
 
         # ── 14. SL Engine (NEW — was skipped) ──────────────────────────
         atr_val = float(flat_indicators.get("atr", 0))
-        sltp_calc = self.sl.calculate(
-            candles=m5_candles,
-            entry_price=entry_calc.price if entry_calc.price > 0 else mid_price,
-            direction=trade_direction or "BUY",  # default to BUY for SL calc
-            atr=atr_val,
-            structure=structure,
-            swing_highs=structure.swing_highs if structure else [],
-            swing_lows=structure.swing_lows if structure else [],
-            zones=zones,
-        )
+        if trade_direction is None:
+            # No clear direction — cannot calculate valid SL/TP
+            sltp_calc = SLTPCalculation(
+                sl_method=SLMethod.NONE,
+                sl_price=0.0,
+                sl_reason="No clear direction",
+                tp1_method=TPMethod.NONE,
+                tp1_price=0.0,
+                tp2_method=TPMethod.NONE,
+                tp2_price=0.0,
+                tp3_method=TPMethod.NONE,
+                tp3_price=0.0,
+                invalidation_reason="No valid trade direction",
+                timestamp=now_ms(),
+            )
+        else:
+            sltp_calc = self.sl.calculate(
+                candles=m5_candles,
+                entry_price=entry_calc.price if entry_calc.price > 0 else mid_price,
+                direction=trade_direction,
+                atr=atr_val,
+                structure=structure,
+                swing_highs=structure.swing_highs if structure else [],
+                swing_lows=structure.swing_lows if structure else [],
+                zones=zones,
+            )
 
         # ── 15. TP Engine (NEW — was skipped) ──────────────────────────
         effective_entry = entry_calc.price if entry_calc.price > 0 else mid_price
         effective_sl = sltp_calc.sl_price
 
-        # Extract liquidity levels and S/R levels from events and zones
-        liq_levels = [e.price for e in liq if e.price > 0]
-        sr_levels = [z.midpoint for z in zones if z.midpoint > 0]
+        if trade_direction is None:
+            tp_result = {
+                "tp1": 0.0, "tp2": 0.0, "tp3": 0.0,
+                "tp1_method": TPMethod.NONE, "tp2_method": TPMethod.NONE, "tp3_method": TPMethod.NONE,
+            }
+        else:
+            # Extract liquidity levels and S/R levels from events and zones
+            liq_levels = [e.price for e in liq if e.price > 0]
+            sr_levels = [z.midpoint for z in zones if z.midpoint > 0]
 
-        tp_result = self.tp.calculate(
-            entry_price=effective_entry,
-            sl_price=effective_sl,
-            direction=trade_direction or "BUY",
-            atr=atr_val,
-            liquidity_levels=liq_levels,
-            sr_levels=sr_levels,
-        )
+            tp_result = self.tp.calculate(
+                entry_price=effective_entry,
+                sl_price=effective_sl,
+                direction=trade_direction,
+                atr=atr_val,
+                liquidity_levels=liq_levels,
+                sr_levels=sr_levels,
+            )
 
         # Merge TP results into SLTPCalculation
         merged_sltp = SLTPCalculation(
@@ -579,32 +623,75 @@ class NexusOverlayApp:
 
         # ── 18b. UNCERTAINTY ENGINE (P0 — audit section 24) ─────────────
         # Compute explicit uncertainty with directional ambiguity
+        # Missing confirmations: extract from confluence evidence
+        missing_confirmations = []
+        if conf and hasattr(conf, 'contributing_factors'):
+            required_patterns = ["BOS", "CHOCH", "LIQUIDITY_SWEEP", "EMA_ALIGNMENT"]
+            for p in required_patterns:
+                if not any(p in f for f in conf.contributing_factors):
+                    missing_confirmations.append(p)
+
+        # Real avg_spread from market data engine (rolling)
+        avg_spread = self.market_data.get_avg_spread("M5", 100) if hasattr(self.market_data, 'get_avg_spread') else spread
+
+        # Signal age: track from active signal if exists
+        signal_age_candles = 0
+        if hasattr(self, '_active_signal_candle_index') and self._active_signal_candle_index > 0:
+            current_candle_idx = len(self.market_data.get_candles("M5") or [])
+            signal_age_candles = max(0, current_candle_idx - self._active_signal_candle_index)
+
         uncertainty_assessment = self.uncertainty.quick_assess(type('obj', (), {
             'bullish_score': getattr(conf, 'bullish_score', 50.0),
             'bearish_score': getattr(conf, 'bearish_score', 50.0),
             'mtf_alignment': getattr(mtf_result, 'alignment', 'partial') if mtf_result else 'partial',
             'data_quality': dq_score,
             'spread': spread,
-            'avg_spread': float(flat_indicators.get('atr', 0.3)) * 0.1,  # rough avg spread
+            'avg_spread': avg_spread,
             'volatility_atr': float(regime_result.get('adx', 2.0)),
             'avg_atr': float(flat_indicators.get('atr', 2.0)),
-            'signal_age_candles': 0,  # fresh signal
+            'signal_age_candles': signal_age_candles,
             'max_signal_age_candles': 10,
-            'missing_confirmations': [],  # TODO: extract from evidence
+            'missing_confirmations': missing_confirmations,
             'invalidation_distance_pips': abs(merged_sltp.sl_price - effective_entry) if merged_sltp.sl_price > 0 else 10.0,
             'sl_distance_pips': abs(merged_sltp.sl_price - effective_entry) if merged_sltp.sl_price > 0 else 10.0,
         })())
         logger.debug(f"Uncertainty: {uncertainty_assessment.overall_level.value} ({uncertainty_assessment.composite_score:.1f})")
 
         # ── 18c. DECISION ELIGIBILITY (P0 — audit section 26) ───────────
+        # Get REAL runtime state — no hardcoded values
+        ws_status = self.ws_server.get_status()
+        mt5_connected = ws_status.get("mt5_clients", 0) > 0
+        websocket_connected = ws_status.get("total_clients", 0) > 0
+        market_open = sess.get("session_active", False)
+        config_changed = self._config.check_config_changed() if hasattr(self, '_config') and hasattr(self._config, 'check_config_changed') else False
+
         # Engine health states
         engine_states = get_health_tracker().summary()
+
+        # Safety result from earlier check
+        safety_passed = not safety_result.block
+        safety_reasons = list(safety_result.blocks) if safety_result.blocks else []
+
+        # Risk validation
+        risk_passed = risk_validation.passed if risk_validation else False
+        risk_reasons = risk_validation.failed_reasons if risk_validation else []
+
+        # MTF alignment
+        mtf_alignment = getattr(mtf_result, 'alignment', 'partial') if mtf_result else 'partial'
+
+        # Directional conflict from uncertainty
+        directional_conflict = uncertainty_assessment.directional_ambiguity
+
+        # Valid setup check
+        has_valid_setup = bool(entry_calc and entry_calc.price > 0)
+        setup_types = [getattr(entry_calc, 'entry_type', 'UNKNOWN')] if entry_calc else []
+
         eligibility = self.eligibility.check(
             config_valid=True,
-            config_changed=False,
-            mt5_connected=True,  # would be from transport layer
-            websocket_connected=True,
-            market_open=True,
+            config_changed=config_changed,
+            mt5_connected=mt5_connected,
+            websocket_connected=websocket_connected,
+            market_open=market_open,
             symbol_available=True,
             data_quality=dq_score,
             data_age_ms=tick_age,
@@ -614,15 +701,15 @@ class NexusOverlayApp:
             spread=spread,
             max_spread=100.0,
             engine_states=engine_states,
-            safety_passed=True,  # already checked
-            safety_reasons=[],
-            risk_passed=risk_validation.passed if risk_validation else False,
-            risk_reasons=risk_validation.failed_reasons if risk_validation else [],
-            mtf_alignment=getattr(mtf_result, 'alignment', 'partial') if mtf_result else 'partial',
-            directional_conflict=uncertainty_assessment.directional_ambiguity,
+            safety_passed=safety_passed,
+            safety_reasons=safety_reasons,
+            risk_passed=risk_passed,
+            risk_reasons=risk_reasons,
+            mtf_alignment=mtf_alignment,
+            directional_conflict=directional_conflict,
             max_directional_conflict=70.0,
-            has_valid_setup=bool(entry_calc and entry_calc.price > 0),
-            setup_types=[getattr(entry_calc, 'entry_type', 'UNKNOWN')] if entry_calc else [],
+            has_valid_setup=has_valid_setup,
+            setup_types=setup_types,
         )
         logger.debug(f"Eligibility: {eligibility.status.value} (can_decide={eligibility.can_decide})")
 

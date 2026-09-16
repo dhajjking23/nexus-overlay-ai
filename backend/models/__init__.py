@@ -170,6 +170,7 @@ class SLMethod(Enum):
     STRUCTURE = "STRUCTURE"
     SWING = "SWING"
     ZONE = "ZONE"
+    NONE = "NONE"
 
 
 class TPMethod(Enum):
@@ -179,6 +180,7 @@ class TPMethod(Enum):
     SUPPORT_RESISTANCE = "SUPPORT_RESISTANCE"
     PREVIOUS_HIGH_LOW = "PREVIOUS_HIGH_LOW"
     ATR_PROJECTION = "ATR_PROJECTION"
+    NONE = "NONE"
 
 
 class AIProviderType(Enum):
@@ -186,6 +188,7 @@ class AIProviderType(Enum):
     OPENAI = "OPENAI"
     CLAUDE = "CLAUDE"
     GEMINI = "GEMINI"
+    OPENROUTER = "OPENROUTER"
     LOCAL = "LOCAL"
 
 

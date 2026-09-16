@@ -460,6 +460,16 @@ class MarketDataEngine:
         m1 = self._candle_windows.get("M1", [])
         return m1[-1].spread if m1 else 0.0
 
+    def get_avg_spread(self, timeframe: str = "M5", lookback: int = 100) -> float:
+        """Return rolling average spread over recent candles."""
+        candles = self._candle_windows.get(timeframe, [])
+        if not candles:
+            return 0.0
+        recent = candles[-lookback:]
+        if not recent:
+            return 0.0
+        return sum(c.spread for c in recent) / len(recent)
+
     def get_dirty_timeframes(self) -> set[str]:
         """Return and clear the set of timeframes with new data."""
         dirty = self._dirty_timeframes.copy()

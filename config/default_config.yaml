@@ -286,7 +286,7 @@ decision:
     mtf_agreement: 0.25
     risk_quality: 0.15
     data_quality: 0.15
-    ai_assessment: 0.10
+    # ai_assessment removed — AI is optional advisory only, not blended into deterministic score
 
 # --- Signal Lifecycle ---
 signal:

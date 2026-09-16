@@ -31,7 +31,7 @@ class OpenRouterProvider(AIProvider):
         )
 
     def provider_type(self) -> AIProviderType:
-        return AIProviderType.LOCAL  # Using LOCAL enum as custom
+        return AIProviderType.OPENROUTER
 
     async def _analyze_impl(self, snapshot: MarketSnapshot) -> AIAssessment:
         api_key = os.getenv("OPENROUTER_API_KEY")
