@@ -202,11 +202,13 @@ class TestConfidenceModel:
             data_quality_score=95.0,
             ai_confidence=80.0,
             mtf_agreement=90.0,
-            final_confidence=87.0,
+            deterministic_score=87.0,
             timestamp=now_ms()
         )
         
         assert cm.technical_score == 85.0
+        assert cm.deterministic_score == 87.0
+        # backward-compatible alias
         assert cm.final_confidence == 87.0
         assert cm.timestamp > 0
 

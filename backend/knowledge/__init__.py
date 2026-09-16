@@ -14,7 +14,13 @@ Each concept includes:
   - conflicts: What CONFLICTS with it
 
 PHASE C — AI Independence: The Trading Intelligence Core has its own brain.
+
+Knowledge Base Version: 1.0.0
+Every signal/decision should reference knowledge_version in its metadata.
 """
+# Knowledge Base Version — increment when concepts change
+KB_VERSION = "1.0.0"
+
 from backend.knowledge.market_structure import (
     MarketStructureConcept,
     BreakOfStructure,
@@ -27,68 +33,72 @@ from backend.knowledge.market_structure import (
 )
 from backend.knowledge.price_action import (
     PriceActionConcept,
-    BullishEngulfing,
-    BearishEngulfing,
-    PinBar,
-    Hammer,
-    ShootingStar,
-    RejectionCandle,
-    InsideBar,
-    OutsideBar,
-    Doji,
-    MomentumCandle,
-    ExhaustionCandle,
+    BULLISH_ENGULFING,
+    BEARISH_ENGULFING,
+    PIN_BAR_BULLISH,
+    SHOOTING_STAR,
+    REJECTION_CANDLE_BULLISH,
+    REJECTION_CANDLE_BEARISH,
+    INSIDE_BAR,
+    OUTSIDE_BAR,
+    DOJI_PATTERN,
+    MOMENTUM_CANDLE,
+    EXHAUSTION_CANDLE,
+    HAMMER_PATTERN,
     ALL_PRICE_ACTION_CONCEPTS,
 )
 from backend.knowledge.liquidity import (
     LiquidityConcept,
-    LiquiditySweep,
-    FalseBreakout,
-    Displacement,
-    EqualHighs,
-    EqualLows,
-    StopRun,
+    LIQUIDITY_SWEEP_BUY_SIDE,
+    LIQUIDITY_SWEEP_SELL_SIDE,
+    FALSE_BREAKOUT,
+    DISPLACEMENT,
+    EQUAL_HIGHS,
+    EQUAL_LOWS,
+    STOP_RUN,
     ALL_LIQUIDITY_CONCEPTS,
 )
 from backend.knowledge.session import (
     SessionConcept,
-    LondonSession,
-    NewYorkSession,
-    TokyoSession,
-    LondonNewYorkOverlap,
+    LONDON_SESSION,
+    NEW_YORK_SESSION,
+    TOKYO_SESSION,
+    LONDON_NEW_YORK_OVERLAP,
     ALL_SESSION_CONCEPTS,
 )
 from backend.knowledge.risk import (
     RiskConcept,
-    SpreadRisk,
-    VolatilityRisk,
-    RiskRewardRisk,
-    SessionRisk,
-    NewsRisk,
-    DataQualityRisk,
-    SignalAgeRisk,
+    SPREAD_RISK,
+    VOLATILITY_RISK,
+    SESSION_RISK,
+    NEWS_RISK,
+    DATA_QUALITY_RISK,
+    SIGNAL_AGE_RISK,
     ALL_RISK_CONCEPTS,
 )
 
 __all__ = [
+    # Knowledge Base Version
+    "KB_VERSION",
     # Market Structure
     "MarketStructureConcept", "BreakOfStructure", "ChangeOfCharacter",
     "HigherHigh", "HigherLow", "LowerHigh", "LowerLow",
     "ALL_STRUCTURE_CONCEPTS",
     # Price Action
-    "PriceActionConcept", "BullishEngulfing", "BearishEngulfing",
-    "PinBar", "Hammer", "ShootingStar", "RejectionCandle",
-    "InsideBar", "OutsideBar", "Doji", "MomentumCandle", "ExhaustionCandle",
-    "ALL_PRICE_ACTION_CONCEPTS",
+    "PriceActionConcept", "BULLISH_ENGULFING", "BEARISH_ENGULFING",
+    "PIN_BAR_BULLISH", "SHOOTING_STAR", "REJECTION_CANDLE_BULLISH",
+    "REJECTION_CANDLE_BEARISH", "INSIDE_BAR", "OUTSIDE_BAR",
+    "DOJI_PATTERN", "MOMENTUM_CANDLE", "EXHAUSTION_CANDLE",
+    "HAMMER_PATTERN", "ALL_PRICE_ACTION_CONCEPTS",
     # Liquidity
-    "LiquidityConcept", "LiquiditySweep", "FalseBreakout", "Displacement",
-    "EqualHighs", "EqualLows", "StopRun",
-    "ALL_LIQUIDITY_CONCEPTS",
+    "LiquidityConcept", "LIQUIDITY_SWEEP_BUY_SIDE", "LIQUIDITY_SWEEP_SELL_SIDE",
+    "FALSE_BREAKOUT", "DISPLACEMENT", "EQUAL_HIGHS", "EQUAL_LOWS",
+    "STOP_RUN", "ALL_LIQUIDITY_CONCEPTS",
     # Session
-    "SessionConcept", "LondonSession", "NewYorkSession", "TokyoSession",
-    "LondonNewYorkOverlap", "ALL_SESSION_CONCEPTS",
+    "SessionConcept", "LONDON_SESSION", "NEW_YORK_SESSION",
+    "TOKYO_SESSION", "LONDON_NEW_YORK_OVERLAP", "ALL_SESSION_CONCEPTS",
     # Risk
-    "RiskConcept", "SpreadRisk", "VolatilityRisk", "RiskRewardRisk",
-    "SessionRisk", "NewsRisk", "DataQualityRisk", "SignalAgeRisk",
+    "RiskConcept", "SPREAD_RISK", "VOLATILITY_RISK", "SESSION_RISK",
+    "NEWS_RISK", "DATA_QUALITY_RISK", "SIGNAL_AGE_RISK",
     "ALL_RISK_CONCEPTS",
 ]

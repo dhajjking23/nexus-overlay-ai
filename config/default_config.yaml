@@ -40,9 +40,13 @@ timeframes:
     H4: 300
 
 # --- Transport Configuration ---
+# INTERNAL ONLY — Use reverse proxy (nginx/caddy) for public access.
+# All services bind to 127.0.0.1 by default. Never expose directly to 0.0.0.0
+# in production without a reverse proxy in front.
 transport:
   type: "websocket"
-  host: "0.0.0.0"
+  # INTERNAL ONLY — Use reverse proxy (nginx/caddy) for public access
+  host: "127.0.0.1"
   port: 8765
   heartbeat_interval: 5000
   reconnect_delay_ms: 1000
@@ -50,7 +54,9 @@ transport:
   stale_data_timeout_ms: 10000
   protocol_version: "1.0"
   auth_token: ""  # empty = disabled
+  # INTERNAL ONLY — Use reverse proxy (nginx/caddy) for public access
   http_port: 8766  # HTTP bridge for MQL5 EA
+  # INTERNAL ONLY — Use reverse proxy (nginx/caddy) for public access
   health_port: 8767  # Health check endpoint
   rate_limit_per_minute: 120
 
@@ -225,10 +231,14 @@ tp:
   tp3_rr: 3.5
 
 # --- AI Configuration ---
-# Default: OpenRouter (OpenAI-compatible API, no paid key needed)
-# Get key: https://openrouter.ai/settings/keys
+# AI is OPTIONAL. Core trading intelligence works without any AI provider.
+# External AI provider is optional. Provider availability, limits,
+# pricing and model access are external dependencies.
+# To enable, set ai.enabled to true and configure at least one provider.
+# Get keys from: https://openrouter.ai/settings/keys (OpenRouter),
+# https://platform.openai.com/api-keys (OpenAI), https://console.anthropic.com/ (Claude).
 ai:
-  enabled: true
+  enabled: false  # AI is OPTIONAL — core trading works without it
   provider: "openrouter"
   providers:
     openrouter:
@@ -341,3 +351,13 @@ performance:
   expensive_analysis_trigger: "CANDLE_CLOSED"
   ai_rate_limit_per_minute: 10
   max_memory_mb: 256
+
+# --- Configuration Lock ---
+# Startup config hash (SHA256) is computed and logged. If the config file
+# changes during runtime, a WARNING is logged. Set refuse_on_change to true
+# to halt the service instead.
+config_lock:
+  # If true, a config change during runtime will shut down the service.
+  refuse_on_change: false
+  # Log the config hash at startup for audit trail
+  log_hash_on_startup: true

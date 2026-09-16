@@ -1,6 +1,14 @@
 """
 NEXUS OVERLAY AI - Confidence Model
 Structured confidence calculation with documented weights.
+
+DESIGN:
+  deterministic_score — computed ONLY from technical, MTF, risk, data.
+  AI has ZERO influence on this score.  When AI is unavailable,
+  deterministic_score is *identical*.
+
+  ai_advisory_score — a separate, optional layer produced by AI.
+  It is informational only and never blended into deterministic_score.
 """
 from __future__ import annotations
 import logging
@@ -12,25 +20,23 @@ logger = logging.getLogger(__name__)
 
 class ConfidenceModelEngine:
     """Calculates structured confidence from multiple components.
-    
-    Formula:
-        final_confidence = (
-            technical_confluence * weight_technical +
-            mtf_agreement * weight_mtf +
-            risk_quality * weight_risk +
-            data_quality * weight_data +
-            ai_confidence * weight_ai
-        )
-    
-    Default weights (sum = 1.0):
+
+    Formula (AI-free):
+        deterministic_score = (
+            technical_confluence * w_tech +
+            mtf_agreement        * w_mtf +
+            risk_quality         * w_risk +
+            data_quality         * w_data
+        ) / (w_tech + w_mtf + w_risk + w_data)
+
+    ai_advisory_score = ai_confidence  (passed through, NOT blended)
+
+    Default weights (sum = 1.0 for deterministic):
         technical: 0.35
         mtf:       0.25
         risk:      0.15
         data:      0.15
-        ai:        0.10
-    
-    AI cannot override deterministic risk rules.
-    If AI is unavailable (confidence = 0), remaining weights are rescaled.
+        ai:        0.10  (used only for ai_advisory_score, NOT in deterministic)
     """
 
     def __init__(self, config: dict[str, Any] | None = None, event_bus=None):
@@ -51,20 +57,25 @@ class ConfidenceModelEngine:
         risk = max(0, min(100, risk_quality))
         dq = max(0, min(100, data_quality))
         ai = max(0, min(100, ai_confidence))
-        if ai == 0:
-            w_sum = self._w_tech + self._w_mtf + self._w_risk + self._w_data
-            if w_sum > 0:
-                final = (technical * self._w_tech + mtf * self._w_mtf +
-                         risk * self._w_risk + dq * self._w_data) / w_sum
-            else:
-                final = (technical + mtf + risk + dq) / 4
+
+        # ── Deterministic score: AI-FREE ──
+        w_sum = self._w_tech + self._w_mtf + self._w_risk + self._w_data
+        if w_sum > 0:
+            det = (technical * self._w_tech + mtf * self._w_mtf +
+                   risk * self._w_risk + dq * self._w_data) / w_sum
         else:
-            total_w = self._w_tech + self._w_mtf + self._w_risk + self._w_data + self._w_ai
-            final = (technical * self._w_tech + mtf * self._w_mtf +
-                     risk * self._w_risk + dq * self._w_data + ai * self._w_ai) / total_w
-        final = max(0, min(100, round(final, 2)))
+            det = (technical + mtf + risk + dq) / 4
+
+        det = max(0, min(100, round(det, 2)))
+
+        # ── AI advisory score: separate layer ──
+        ai_score = ai  # passed through, not blended
+
         return ConfidenceModel(
             technical_score=technical, risk_score=risk,
             data_quality_score=dq, ai_confidence=ai,
-            mtf_agreement=mtf, final_confidence=final, timestamp=now_ms()
+            mtf_agreement=mtf,
+            deterministic_score=det,
+            ai_advisory_score=ai_score,
+            timestamp=now_ms(),
         )

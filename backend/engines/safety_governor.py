@@ -514,6 +514,75 @@ class SafetyGovernor:
 
         return verdict
 
+    def _check_cfg(self, key: str, default):
+        """Read a config value, checking both flat and nested ``safety:`` keys."""
+        val = self._config.get(key)
+        if val is not None:
+            return val
+        safety = self._config.get("safety", {})
+        if isinstance(safety, dict):
+            val = safety.get(key)
+            if val is not None:
+                return val
+        return default
+
+    def check(
+        self,
+        *,
+        last_tick_age_ms: int = 0,
+        spread: float = 0.0,
+        volatility_atr: float = 0.0,
+        atr_avg: float = 0.0,
+        mtf_aligned: bool = True,
+        data_quality: float = 100.0,
+        connected: bool = True,
+    ) -> dict:
+        """
+        Synchronous convenience check — backward-compatible interface.
+        Returns {'passed': bool, 'failed_reasons': list[str]}.
+
+        This is a simplified synchronous wrapper.  For the full safety
+        audit (async, with event-bus publishing), use ``validate()``.
+        """
+        failed: list[str] = []
+
+        # --- Transport ---
+        if not connected:
+            failed.append("Transport disconnected")
+
+        # --- Stale data ---
+        stale_threshold = self._check_cfg("stale_data_threshold_ms", 10_000)
+        if last_tick_age_ms > stale_threshold:
+            failed.append(
+                f"Data stale: {last_tick_age_ms}ms > {stale_threshold}ms"
+            )
+
+        # --- Excessive spread ---
+        max_spread = self._check_cfg("max_spread", 1.0)
+        if spread > max_spread:
+            failed.append(
+                f"Excessive spread: {spread:.2f} > {max_spread}"
+            )
+
+        # --- Abnormal volatility ---
+        if atr_avg > 0 and volatility_atr > 0:
+            ratio = volatility_atr / atr_avg
+            if ratio > self.max_volatility_mult:
+                failed.append(
+                    f"Abnormal volatility: {ratio:.1f}x average"
+                )
+
+        # --- Data quality ---
+        if data_quality < self.min_data_quality:
+            failed.append(
+                f"Data quality too low: {data_quality:.1f} < {self.min_data_quality}"
+            )
+
+        return {
+            "passed": len(failed) == 0,
+            "failed_reasons": failed,
+        }
+
     def get_stats(self) -> dict[str, Any]:
         """Get safety governor statistics."""
         return {

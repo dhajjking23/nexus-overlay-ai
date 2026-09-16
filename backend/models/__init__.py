@@ -465,14 +465,28 @@ class SLTPCalculation:
 
 @dataclass
 class ConfidenceModel:
-    """Structured confidence breakdown"""
+    """Structured confidence breakdown — AI-INDEPENDENT.
+
+    ``deterministic_score`` is computed solely from technical, structure,
+    risk, and data-quality components.  AI has NO influence on it.
+
+    ``ai_advisory_score`` is a *separate*, optional layer produced by
+    an AI provider.  It is informational only and never blended into
+    ``deterministic_score``.
+    """
     technical_score: float
     risk_score: float
     data_quality_score: float
-    ai_confidence: float
+    ai_confidence: float  # kept for backward compat (same as ai_advisory_score)
     mtf_agreement: float
-    final_confidence: float
-    timestamp: int
+    deterministic_score: float  # was final_confidence — AI-free
+    ai_advisory_score: float = 0.0  # separate AI layer (0-100)
+    timestamp: int = 0
+
+    @property
+    def final_confidence(self) -> float:
+        """Backward-compatible alias → deterministic_score."""
+        return self.deterministic_score
 
 
 @dataclass

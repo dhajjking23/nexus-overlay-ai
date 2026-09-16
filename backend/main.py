@@ -86,29 +86,32 @@ def _build_indicator_value_dict(
         ("BB", lambda: indicator_engine.compute_bollinger_bands(candles)),
     ]
 
+    from backend.engines.engine_health import get_health_tracker
+    health = get_health_tracker().get("indicator_engine")
+
     for name, method in individual_methods:
         try:
             iv = method()
             if iv is not None:
                 iv_map[name] = iv
-        except Exception:
-            pass
+        except Exception as e:
+            health.record_degraded(f"Indicator {name} failed: {e}")
 
     # ADX returns a dict-like result from compute_adx
     try:
         adx_result = indicator_engine.compute_adx(candles)
         if adx_result is not None:
             iv_map["ADX"] = adx_result
-    except Exception:
-        pass
+    except Exception as e:
+        health.record_degraded(f"ADX failed: {e}")
 
     # Volume
     try:
         vol_result = indicator_engine.compute_volume(candles)
         if vol_result is not None:
             iv_map["VOLUME"] = vol_result
-    except Exception:
-        pass
+    except Exception as e:
+        health.record_degraded(f"Volume failed: {e}")
 
     return iv_map
 
@@ -181,7 +184,7 @@ def _build_market_snapshot(
         volatility=vol_dict,
         session=session_info.get("primary_session", "off"),
         regime=regime_str,
-        data_quality=dq_score / 100.0,  # MarketSnapshot expects 0-1
+        data_quality=dq_score,  # canonical 0-100 scale
         timestamp=now_ms(),
     )
 
@@ -257,6 +260,16 @@ class NexusOverlayApp:
             manager.add_provider(OpenAIProvider())
             manager.add_provider(ClaudeProvider())
             manager.add_provider(LocalProvider())
+
+            # Add OpenRouter if configured as the preferred provider
+            ai_cfg = cfg.get("ai", {})
+            if ai_cfg.get("provider") == "openrouter":
+                try:
+                    from backend.ai.openrouter_provider import OpenRouterProvider
+                    manager.add_provider(OpenRouterProvider())
+                except Exception as e:
+                    logger.warning(f"OpenRouter provider init failed: {e}")
+
             available = [p.provider_type().value for p in manager.providers if p.is_available]
             if available:
                 logger.info(f"AI providers ready: {available}")
@@ -404,7 +417,7 @@ class NexusOverlayApp:
             mtf=mtf_result,
             regime=ms_regime,
             session=session_type,
-            data_quality=dq_score / 100.0,
+            data_quality=dq_score,  # canonical 0-100 scale
             data_age_ms=tick_age,
             timestamp=now_ms(),
         )

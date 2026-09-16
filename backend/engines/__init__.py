@@ -42,6 +42,10 @@ from backend.engines.market_snapshot import (
     MarketSnapshot, ClockDiscipline, DataSource,
     SymbolSpecification, generate_snapshot_id,
 )
+from backend.engines.engine_health import (
+    EngineHealthState, EngineHealth, EngineHealthTracker,
+    get_health_tracker, reset_health_tracker,
+)
 
 __all__ = [
     # Existing engines
@@ -61,4 +65,7 @@ __all__ = [
     # PHASE C — Market Snapshot
     "MarketSnapshot", "ClockDiscipline", "DataSource",
     "SymbolSpecification", "generate_snapshot_id",
+    # Engine Health Tracking
+    "EngineHealthState", "EngineHealth", "EngineHealthTracker",
+    "get_health_tracker", "reset_health_tracker",
 ]

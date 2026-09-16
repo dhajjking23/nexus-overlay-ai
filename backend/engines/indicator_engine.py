@@ -6,6 +6,7 @@ tick volume, relative volume, and volume expansion/contraction.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 from dataclasses import dataclass, field
@@ -25,7 +26,13 @@ class IndicatorEngine:
     and is deterministic given the same candle window.
     """
 
-    def __init__(self, config: dict, event_bus: EventBus):
+    def __init__(self, config: dict = None, event_bus: EventBus = None):
+        if config is None:
+            from backend.config_loader import get_config
+            config = get_config().all()
+        if event_bus is None:
+            from backend.event_bus import get_event_bus as _ge
+            event_bus = _ge()
         self._config = config
         self._bus = event_bus
 
@@ -114,15 +121,19 @@ class IndicatorEngine:
             auxiliary={"price": current_price, "distance": round(current_price - ema, 6)},
         )
 
-        asyncio.get_event_loop().call_soon(
-            lambda: asyncio.ensure_future(
-                self._bus.publish(
-                    EventType.INDICATOR_UPDATED,
-                    source="indicator_engine",
-                    payload={"indicator": iv.indicator, "value": iv.value, "state": iv.state},
+        try:
+            loop = asyncio.get_running_loop()
+            loop.call_soon(
+                lambda: asyncio.ensure_future(
+                    self._bus.publish(
+                        EventType.INDICATOR_UPDATED,
+                        source="indicator_engine",
+                        payload={"indicator": iv.indicator, "value": iv.value, "state": iv.state},
+                    )
                 )
             )
-        )
+        except RuntimeError:
+            pass  # No running event loop (e.g. in tests)
 
         return iv
 
@@ -278,6 +289,9 @@ class IndicatorEngine:
 
     def compute(self, candles: list[CandleData]) -> dict:
         """Compute all indicators for a candle window. Returns dict of indicator_name -> value."""
+        from backend.engines.engine_health import get_health_tracker
+        health = get_health_tracker().get("indicator_engine")
+
         if not candles or len(candles) < 20:
             return {}
         results = {}
@@ -300,8 +314,8 @@ class IndicatorEngine:
                 if val is not None:
                     results[name] = val.value
                     results[f"{name}_state"] = val.state
-            except Exception:
-                pass
+            except Exception as e:
+                health.record_degraded(f"Indicator {name} failed: {e}")
         # ADX + DI
         try:
             adx_result = self.compute_adx(candles)
@@ -309,8 +323,11 @@ class IndicatorEngine:
                 results["adx"] = adx_result.get("adx", 0)
                 results["di_plus"] = adx_result.get("di_plus", 0)
                 results["di_minus"] = adx_result.get("di_minus", 0)
-        except Exception:
-            pass
+        except Exception as e:
+            health.record_degraded(f"ADX failed: {e}")
+
+        health.record_success()
+        return results
         return results
 
     # ── ROC ───────────────────────────────────────────────────────────────
