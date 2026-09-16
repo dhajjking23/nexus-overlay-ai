@@ -48,6 +48,7 @@ class WebSocketClient(
 
     /**
      * Connect to the WebSocket server.
+     * Uses currently saved host/port/authToken if not overridden.
      */
     fun connect(serverHost: String = host, serverPort: Int = port) {
         host = serverHost
@@ -132,7 +133,7 @@ class WebSocketClient(
                 reconnectAttempt = 0
                 signalStore.updateConnectionState(ConnectionState.CONNECTED)
 
-                // Send identification message as first message
+                // Send identification message as first message (includes auth_token)
                 val identificationMsg = buildIdentificationMessage()
                 webSocket.send(identificationMsg)
             }

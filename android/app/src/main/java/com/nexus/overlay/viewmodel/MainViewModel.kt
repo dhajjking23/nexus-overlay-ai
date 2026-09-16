@@ -16,15 +16,30 @@ import kotlinx.coroutines.launch
 /**
  * Main ViewModel managing all UI state and user actions.
  * Bridges SignalStore data to UI composables.
+ * Loads/saves settings via SettingsManager (SharedPreferences).
  */
 class MainViewModel(
     private val signalStore: SignalStore,
-    private val webSocketClient: WebSocketClient
+    private val webSocketClient: WebSocketClient,
+    private val settingsManager: SettingsManager
 ) : AndroidViewModel(NexusOverlayApp.instance) {
 
-    // --- UI State ---
-    private val _uiState = MutableStateFlow(UiState())
+    // --- UI State (loaded from saved settings) ---
+    private val _uiState = MutableStateFlow(loadInitialState())
     val uiState: StateFlow<UiState> = _uiState.asStateFlow()
+
+    private fun loadInitialState(): UiState {
+        return UiState(
+            serverHost = settingsManager.serverHost,
+            serverPort = settingsManager.serverPort,
+            authToken = settingsManager.authToken,
+            overlayMode = settingsManager.overlayMode,
+            overlayOpacity = settingsManager.overlayOpacity,
+            autoConnect = settingsManager.autoConnect,
+            alertOnSignal = settingsManager.alertOnSignal,
+            alertOnSLHit = settingsManager.alertOnSLHit
+        )
+    }
 
     init {
         // Observe signal store and update UI state
@@ -69,12 +84,18 @@ class MainViewModel(
                 _uiState.update { it.copy(signalHistory = history) }
             }
         }
+
+        // Auto-connect on startup if enabled
+        if (_uiState.value.autoConnect) {
+            connect()
+        }
     }
 
     // --- Connection actions ---
-
     fun connect() {
         val state = _uiState.value
+        // Ensure auth token is synced to WebSocketClient before connecting
+        webSocketClient.updateAuthToken(state.authToken)
         webSocketClient.connect(state.serverHost, state.serverPort)
     }
 
@@ -87,7 +108,6 @@ class MainViewModel(
     }
 
     // --- Overlay actions ---
-
     fun toggleOverlay() {
         val ctx = getApplication<NexusOverlayApp>()
         if (!Settings.canDrawOverlays(ctx)) {
@@ -116,23 +136,27 @@ class MainViewModel(
         }
     }
 
-    // --- Settings actions ---
-
+    // --- Settings actions (all auto-save) ---
     fun updateServerHost(host: String) {
         _uiState.update { it.copy(serverHost = host) }
+        settingsManager.serverHost = host
     }
 
     fun updateServerPort(port: String) {
-        _uiState.update { it.copy(serverPort = port.toIntOrNull() ?: 8765) }
+        val parsed = port.toIntOrNull() ?: 8765
+        _uiState.update { it.copy(serverPort = parsed) }
+        settingsManager.serverPort = parsed
     }
 
     fun updateAuthToken(token: String) {
         _uiState.update { it.copy(authToken = token) }
         webSocketClient.updateAuthToken(token)
+        settingsManager.authToken = token
     }
 
     fun updateOverlayMode(mode: OverlayMode) {
         _uiState.update { it.copy(overlayMode = mode) }
+        settingsManager.overlayMode = mode
         // If overlay is running, restart with new mode
         if (_uiState.value.isOverlayRunning) {
             val ctx = getApplication<NexusOverlayApp>()
@@ -146,19 +170,23 @@ class MainViewModel(
 
     fun updateAutoConnect(enabled: Boolean) {
         _uiState.update { it.copy(autoConnect = enabled) }
+        settingsManager.autoConnect = enabled
         if (enabled) connect()
     }
 
     fun updateAlertOnSignal(enabled: Boolean) {
         _uiState.update { it.copy(alertOnSignal = enabled) }
+        settingsManager.alertOnSignal = enabled
     }
 
     fun updateAlertOnSLHit(enabled: Boolean) {
         _uiState.update { it.copy(alertOnSLHit = enabled) }
+        settingsManager.alertOnSLHit = enabled
     }
 
     fun updateOverlayOpacity(opacity: Float) {
         _uiState.update { it.copy(overlayOpacity = opacity) }
+        settingsManager.overlayOpacity = opacity
         if (_uiState.value.isOverlayRunning) {
             val ctx = getApplication<NexusOverlayApp>()
             val intent = Intent(ctx, OverlayService::class.java).apply {
@@ -176,7 +204,6 @@ class MainViewModel(
 }
 
 // --- UI State ---
-
 data class UiState(
     val currentSignal: SignalData? = null,
     val marketData: MarketData = MarketData(),
@@ -188,9 +215,9 @@ data class UiState(
     val isOverlayRunning: Boolean = false,
     val overlayMode: OverlayMode = OverlayMode.STANDARD,
     val overlayOpacity: Float = 0.85f,
-    val serverHost: String = "192.168.1.100",
-    val serverPort: Int = 8765,
-    val authToken: String = "",
+    val serverHost: String = SettingsManager.DEFAULT_HOST,
+    val serverPort: Int = SettingsManager.DEFAULT_PORT,
+    val authToken: String = SettingsManager.DEFAULT_AUTH_TOKEN,
     val autoConnect: Boolean = true,
     val alertOnSignal: Boolean = true,
     val alertOnSLHit: Boolean = false,

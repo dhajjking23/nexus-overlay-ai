@@ -135,7 +135,7 @@ class NexusOverlayApp:
 
     # --- Callbacks from MT5 EA ---
     async def _on_tick(self, client, message):
-        logger.info(f"_on_tick: bid={message.payload.get("bid")} ask={message.payload.get("ask")}")
+        logger.info(f"_on_tick: bid={message.payload.get(bid)} ask={message.payload.get(ask)}")
         payload = message.payload
         try:
             await self.market_data.process_tick(payload)
@@ -227,7 +227,7 @@ class NexusOverlayApp:
     async def _on_candle(self, client, message):
         payload = message.payload
         tf = message.timeframe or "M5"
-        logger.info(f"_on_candle called: tf={tf} open={payload.get('open')} close={payload.get('close')}")
+        logger.info(f"_on_candle called: tf=" + tf + " open=" + str(payload.get("open")) + " close=" + str(payload.get("close")))
         try:
             await self.market_data.process_candle(payload, tf)
             candles = self.market_data.get_candles(tf)

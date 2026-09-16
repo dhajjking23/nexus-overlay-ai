@@ -4,6 +4,7 @@ import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.os.Build
+import com.nexus.overlay.data.SettingsManager
 import com.nexus.overlay.data.SignalStore
 import com.nexus.overlay.data.WebSocketClient
 import com.nexus.overlay.viewmodel.MainViewModel
@@ -23,14 +24,23 @@ class NexusOverlayApp : Application() {
     lateinit var viewModel: MainViewModel
         private set
 
+    lateinit var settingsManager: SettingsManager
+        private set
+
     override fun onCreate() {
         super.onCreate()
         instance = this
 
-        // Initialize shared dependencies
+        // Initialize settings (SharedPreferences)
+        settingsManager = SettingsManager(this)
+
+        // Initialize shared dependencies with saved settings
         signalStore = SignalStore()
-        webSocketClient = WebSocketClient(signalStore)
-        viewModel = MainViewModel(signalStore, webSocketClient)
+        webSocketClient = WebSocketClient(
+            signalStore = signalStore,
+            authToken = settingsManager.authToken
+        )
+        viewModel = MainViewModel(signalStore, webSocketClient, settingsManager)
 
         // Create notification channels
         createNotificationChannels()
