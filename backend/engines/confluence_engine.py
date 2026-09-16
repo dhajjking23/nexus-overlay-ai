@@ -80,9 +80,108 @@ class ConfluenceEngine:
         scores["risk_reward"] = rr_score * self._weights.get("risk_reward", 5) / total_w
 
         total_score = sum(scores.values())
-        return ConfluenceScore(weights=self._weights.copy(), scores=scores,
-                               total_score=round(total_score, 2),
-                               contributing_factors=evidence, timestamp=now_ms())
+
+        # ── Directional decomposition (audit section 21, P0) ──────────
+        bullish, bearish, neutral = self._decompose_direction(
+            indicators, structure, mtf, price_action, liquidity
+        )
+        total_dir = bullish + bearish + neutral
+        if total_dir > 0:
+            directional_agreement = 100.0 * (1.0 - min(bullish, bearish) / max(bullish, bearish, 1))
+            conflict_score = 100.0 * (2.0 * min(bullish, bearish) / total_dir) if total_dir > 0 else 0.0
+        else:
+            directional_agreement = 0.0
+            conflict_score = 100.0
+
+        return ConfluenceScore(
+            weights=self._weights.copy(), scores=scores,
+            total_score=round(total_score, 2),
+            bullish_score=round(bullish, 2),
+            bearish_score=round(bearish, 2),
+            neutral_score=round(neutral, 2),
+            net_directional_score=round(bullish - bearish, 2),
+            directional_agreement=round(directional_agreement, 2),
+            conflict_score=round(conflict_score, 2),
+            contributing_factors=evidence, timestamp=now_ms())
+
+    def _decompose_direction(self, indicators, structure, mtf, price_action, liquidity):
+        """Separate bullish/bearish/neutral evidence for directional confluence."""
+        bullish = 0.0
+        bearish = 0.0
+        neutral = 0.0
+
+        # EMA direction
+        ema20 = indicators.get("ema_20")
+        ema50 = indicators.get("ema_50")
+        if ema20 and ema50:
+            if ema20.value > ema50.value:
+                bullish += 15
+            elif ema20.value < ema50.value:
+                bearish += 15
+            else:
+                neutral += 5
+
+        # Structure direction
+        if structure:
+            if hasattr(structure, "trend"):
+                if str(getattr(structure.trend, "value", structure.trend)) == "BULLISH":
+                    bullish += 15
+                elif str(getattr(structure.trend, "value", structure.trend)) == "BEARISH":
+                    bearish += 15
+                else:
+                    neutral += 5
+
+        # MTF alignment
+        if mtf:
+            if hasattr(mtf, "alignment"):
+                if mtf.alignment == "aligned":
+                    # Check dominant direction
+                    if hasattr(mtf, "dominant_trend"):
+                        dom = str(getattr(mtf.dominant_trend, "value", mtf.dominant_trend))
+                        if "BULLISH" in dom:
+                            bullish += 15
+                        elif "BEARISH" in dom:
+                            bearish += 15
+                        else:
+                            neutral += 15
+                elif mtf.alignment == "conflicting":
+                    bullish += 5
+                    bearish += 5
+                    neutral += 5
+                else:
+                    neutral += 10
+
+        # Price action patterns
+        for p in (price_action or []):
+            direction = getattr(p, "direction", None)
+            if direction:
+                d = str(getattr(direction, "value", direction)).upper()
+                if "BULLISH" in d:
+                    bullish += 10
+                elif "BEARISH" in d:
+                    bearish += 10
+                else:
+                    neutral += 5
+
+        # Liquidity events
+        for liq in (liquidity or []):
+            event_type = str(getattr(liq, "event_type", "")).upper()
+            if "SWEEP" in event_type:
+                # Sweep above highs → bearish; sweep below lows → bullish
+                if hasattr(liq, "price") and hasattr(liq, "level"):
+                    if liq.price < liq.level:
+                        bullish += 10
+                    else:
+                        bearish += 10
+                else:
+                    neutral += 5
+            else:
+                neutral += 3
+
+        if bullish == 0 and bearish == 0:
+            neutral = max(neutral, 10.0)
+
+        return bullish, bearish, neutral
 
     def _score_trend(self, ind: dict, ev: list) -> float:
         score = 50.0

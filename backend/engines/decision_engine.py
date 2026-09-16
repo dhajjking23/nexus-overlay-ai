@@ -267,6 +267,9 @@ class DecisionEngineOutput:
         self.mtf: Optional[MultiTimeframeAnalysis] = None
         self.structure_summary: str = ""
         self.liquidity_state: str = ""
+        # P0 — uncertainty and eligibility (audit sections 24, 26)
+        self.uncertainty = None   # UncertaintyAssessment
+        self.eligibility = None   # DecisionEligibilityResult
 
 
 class DecisionEngine:

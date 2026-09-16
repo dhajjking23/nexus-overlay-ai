@@ -40,6 +40,9 @@ from backend.engines.tp_engine import TPEngine
 from backend.engines.confidence_model import ConfidenceModelEngine
 from backend.engines.decision_engine import DecisionEngine, DecisionEngineOutput
 from backend.engines.safety_governor import SafetyGovernor
+from backend.engines.uncertainty import UncertaintyEngine
+from backend.engines.decision_eligibility import DecisionEligibility
+from backend.engines.engine_health import get_health_tracker
 from backend.transport.websocket_server import NexusWebSocketServer
 from backend.transport.http_bridge import HTTPBridgeServer
 from backend.health import HealthServer
@@ -219,6 +222,16 @@ class NexusOverlayApp:
         self.confidence = ConfidenceModelEngine(cfg, self._event_bus)
         self.safety = SafetyGovernor(cfg)
         self.decision = DecisionEngine()
+        self.uncertainty = UncertaintyEngine(cfg)
+        self.eligibility = DecisionEligibility(cfg)
+
+        # Register all engines for health tracking
+        ht = get_health_tracker()
+        for name in ["market_data", "indicators", "price_action", "structure",
+                      "liquidity", "zones", "mtf", "session", "regime",
+                      "strategy", "confluence", "risk", "entry", "sl", "tp",
+                      "confidence", "safety", "decision", "uncertainty", "eligibility"]:
+            ht.register(name)
 
         # AI providers (OPTIONAL advisory — not authoritative)
         self._ai_manager = self._init_ai_providers(cfg)
@@ -564,14 +577,82 @@ class NexusOverlayApp:
             ai_confidence=ai_confidence,
         )
 
-        # ── 18. Build DecisionEngineOutput (NOW with all fields!) ──────
+        # ── 18b. UNCERTAINTY ENGINE (P0 — audit section 24) ─────────────
+        # Compute explicit uncertainty with directional ambiguity
+        uncertainty_assessment = self.uncertainty.quick_assess(type('obj', (), {
+            'bullish_score': getattr(conf, 'bullish_score', 50.0),
+            'bearish_score': getattr(conf, 'bearish_score', 50.0),
+            'mtf_alignment': getattr(mtf_result, 'alignment', 'partial') if mtf_result else 'partial',
+            'data_quality': dq_score,
+            'spread': spread,
+            'avg_spread': float(flat_indicators.get('atr', 0.3)) * 0.1,  # rough avg spread
+            'volatility_atr': float(regime_result.get('adx', 2.0)),
+            'avg_atr': float(flat_indicators.get('atr', 2.0)),
+            'signal_age_candles': 0,  # fresh signal
+            'max_signal_age_candles': 10,
+            'missing_confirmations': [],  # TODO: extract from evidence
+            'invalidation_distance_pips': abs(merged_sltp.sl_price - effective_entry) if merged_sltp.sl_price > 0 else 10.0,
+            'sl_distance_pips': abs(merged_sltp.sl_price - effective_entry) if merged_sltp.sl_price > 0 else 10.0,
+        })())
+        logger.debug(f"Uncertainty: {uncertainty_assessment.overall_level.value} ({uncertainty_assessment.composite_score:.1f})")
+
+        # ── 18c. DECISION ELIGIBILITY (P0 — audit section 26) ───────────
+        # Engine health states
+        engine_states = get_health_tracker().summary()
+        eligibility = self.eligibility.check(
+            config_valid=True,
+            config_changed=False,
+            mt5_connected=True,  # would be from transport layer
+            websocket_connected=True,
+            market_open=True,
+            symbol_available=True,
+            data_quality=dq_score,
+            data_age_ms=tick_age,
+            max_data_age_ms=30000,
+            bid=bid,
+            ask=ask,
+            spread=spread,
+            max_spread=100.0,
+            engine_states=engine_states,
+            safety_passed=True,  # already checked
+            safety_reasons=[],
+            risk_passed=risk_validation.passed if risk_validation else False,
+            risk_reasons=risk_validation.failed_reasons if risk_validation else [],
+            mtf_alignment=getattr(mtf_result, 'alignment', 'partial') if mtf_result else 'partial',
+            directional_conflict=uncertainty_assessment.directional_ambiguity,
+            max_directional_conflict=70.0,
+            has_valid_setup=bool(entry_calc and entry_calc.price > 0),
+            setup_types=[getattr(entry_calc, 'entry_type', 'UNKNOWN')] if entry_calc else [],
+        )
+        logger.debug(f"Eligibility: {eligibility.status.value} (can_decide={eligibility.can_decide})")
+
+        if not eligibility.can_decide:
+            # Emit WAIT with blocking reasons
+            await self.ws_server.broadcast_to_android({
+                "message_type": "MARKET_SNAPSHOT",
+                "payload": {
+                    "decision": "WAIT",
+                    "reason": "INELIGIBLE",
+                    "blocking_reasons": eligibility.blocking_reasons,
+                    "warning_reasons": eligibility.warning_reasons,
+                    "eligibility": eligibility.to_dict(),
+                    "uncertainty": uncertainty_assessment.to_dict(),
+                    "price": mid_price,
+                    "spread": spread,
+                    "data_quality": dq_score,
+                    "data_age_ms": tick_age,
+                }
+            })
+            return
+
+        # ── 18d. Build DecisionEngineOutput ─────────────────────────────
         output = DecisionEngineOutput()
         output.strategy_assessments = strategies
         output.confluence = conf
-        output.risk_validation = risk_validation       # ← THIS was None before!
-        output.entry_calc = entry_calc                  # ← NEW
-        output.sltp_calc = merged_sltp                  # ← NEW
-        output.confidence_model = confidence_model      # ← NEW
+        output.risk_validation = risk_validation
+        output.entry_calc = entry_calc
+        output.sltp_calc = merged_sltp
+        output.confidence_model = confidence_model
         output.price = mid_price
         output.spread = spread
         output.trend = regime_result.get("trend", "NEUTRAL")
@@ -582,6 +663,9 @@ class NexusOverlayApp:
         output.transport_connected = True
         output.market_open = True
         output.symbol = "XAUUSD"
+        # Attach uncertainty & eligibility for transparency
+        output.uncertainty = uncertainty_assessment
+        output.eligibility = eligibility
 
         # ── 19. Decision Engine ────────────────────────────────────────
         try:

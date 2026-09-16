@@ -387,10 +387,17 @@ class StrategyAssessment:
 
 @dataclass
 class ConfluenceScore:
-    """Confluence weighted evidence matrix"""
+    """Confluence weighted evidence matrix — direction-aware."""
     weights: dict[str, int]
     scores: dict[str, float]
     total_score: float
+    # Directional decomposition (audit section 21, P0)
+    bullish_score: float = 0.0        # Sum of bullish-biased components
+    bearish_score: float = 0.0        # Sum of bearish-biased components
+    neutral_score: float = 0.0        # Neutral components
+    net_directional_score: float = 0.0  # bullish - bearish
+    directional_agreement: float = 0.0  # How aligned indicators are (0-100)
+    conflict_score: float = 0.0       # Severity of directional conflict (0-100)
     contributing_factors: list[str] = field(default_factory=list)
     timestamp: int = field(default_factory=lambda: int(datetime.now().timestamp() * 1000))
 
