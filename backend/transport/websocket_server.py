@@ -478,7 +478,7 @@ class NexusWebSocketServer:
         await self.broadcast_to_android(msg)
     
     async def _stale_check_loop(self) -> None:
-        """Periodically check for stale clients."""
+        """Periodically check for stale MT5 EA clients (not Android consumers)."""
         while self._running:
             await asyncio.sleep(5.0)
             
@@ -486,13 +486,15 @@ class NexusWebSocketServer:
             stale_clients = []
             
             for client_id, client in self.clients.items():
-                age = now - client.last_seen
-                if age > self.stale_timeout:
-                    stale_clients.append(client_id)
-                    logger.warning(
-                        f"Stale client detected: {client_id} "
-                        f"(last seen {age}ms ago)"
-                    )
+                # Only disconnect MT5 EA if stale — Android is a consumer, not data source
+                if client.client_type == ClientType.MT5_EA:
+                    age = now - client.last_seen
+                    if age > self.stale_timeout:
+                        stale_clients.append(client_id)
+                        logger.warning(
+                            f"Stale MT5 client detected: {client_id} "
+                            f"(last seen {age}ms ago)"
+                        )
             
             for client_id in stale_clients:
                 await self._remove_client(client_id)
